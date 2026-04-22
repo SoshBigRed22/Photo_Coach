@@ -1,0 +1,260 @@
+:root {
+  --bg: #f4efe4;
+  --ink: #1a1b1d;
+  --panel: rgba(255, 255, 255, 0.85);
+  --accent: #136f63;
+  --accent-strong: #0d5149;
+  --warn: #cf6a32;
+  --danger: #9a1f1f;
+  --edge: rgba(26, 27, 29, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 20%, rgba(19, 111, 99, 0.25) 0%, rgba(19, 111, 99, 0) 36%),
+    radial-gradient(circle at 88% 82%, rgba(207, 106, 50, 0.22) 0%, rgba(207, 106, 50, 0) 30%),
+    linear-gradient(130deg, #f8f4eb, #efe8d8 52%, #e9e2d2);
+}
+
+.shell {
+  width: min(1180px, 92vw);
+  margin: 0 auto;
+  padding: 28px 0 44px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-family: "Fraunces", serif;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+}
+
+.kicker {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  color: var(--accent-strong);
+}
+
+.subtitle {
+  margin: 12px 0 0;
+  max-width: 48ch;
+  line-height: 1.45;
+}
+
+.grid {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+}
+
+.card {
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+  padding: 18px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 1.08rem;
+}
+
+.camera-card { grid-column: span 5; }
+.upload-card { grid-column: span 4; }
+.results-card { grid-column: span 3; }
+
+.camera-controls {
+  margin-bottom: 10px;
+}
+
+.system-controls {
+  margin-top: 10px;
+}
+
+.camera-controls label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: rgba(26, 27, 29, 0.82);
+}
+
+.camera-control-row {
+  display: flex;
+  gap: 8px;
+}
+
+#cameraSelect {
+  flex: 1;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: #ffffff;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+}
+
+#refreshCamerasBtn {
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+#testSystemIndexBtn {
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #355070;
+}
+
+#testSystemIndexBtn:hover {
+  background: #283b54;
+}
+
+.camera-status {
+  margin: 8px 0 0;
+  font-size: 0.84rem;
+  color: rgba(26, 27, 29, 0.72);
+}
+
+video,
+#previewImage {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: #d7d7d7;
+}
+
+#previewImage {
+  display: none;
+  margin-top: 10px;
+}
+
+.actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #f8f8f8;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+button:hover {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+#systemCaptureBtn {
+  background: #2f4858;
+}
+
+#systemCaptureBtn:hover {
+  background: #203844;
+}
+
+#autoProbeBtn {
+  background: #5b4b8a;
+}
+
+#autoProbeBtn:hover {
+  background: #453866;
+}
+
+#autoCaptureBtn {
+  background: #7a3e2f;
+}
+
+#autoCaptureBtn:hover {
+  background: #5e3024;
+}
+
+.dropzone {
+  display: block;
+  border: 1px dashed var(--edge);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+  padding: 18px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dropzone input {
+  display: none;
+}
+
+.score-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  background: rgba(19, 111, 99, 0.14);
+  color: var(--accent-strong);
+}
+
+.tips-list {
+  margin: 12px 0;
+  padding-left: 18px;
+  line-height: 1.35;
+}
+
+.metrics-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 10px;
+  font-size: 0.92rem;
+}
+
+.metrics-grid dt {
+  color: rgba(26, 27, 29, 0.7);
+}
+
+.metrics-grid dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (max-width: 980px) {
+  .camera-card,
+  .upload-card,
+  .results-card {
+    grid-column: 1 / -1;
+  }
+
+  video,
+  #previewImage {
+    aspect-ratio: 4 / 3;
+  }
+}

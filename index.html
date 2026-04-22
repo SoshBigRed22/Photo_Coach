@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photo Coach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="kicker">MVP Demo</p>
+      <h1>Photo Coach</h1>
+      <p class="subtitle">Snap or upload a photo and get instant quality feedback with actionable fixes.</p>
+    </header>
+
+    <section class="grid">
+      <article class="card camera-card">
+        <h2>Camera</h2>
+        <div class="camera-controls">
+          <label for="cameraSelect">Camera Source</label>
+          <div class="camera-control-row">
+            <select id="cameraSelect"></select>
+            <button id="refreshCamerasBtn" type="button">Refresh</button>
+          </div>
+          <p id="cameraStatus" class="camera-status">Click Refresh to list camera devices.</p>
+        </div>
+        <video id="cameraFeed" autoplay muted></video>
+        <canvas id="captureCanvas" hidden></canvas>
+        <div class="camera-controls system-controls">
+          <label for="systemCameraIndex">System Camera Index (fallback)</label>
+          <div class="camera-control-row">
+            <select id="systemCameraIndex">
+              <option value="0">Index 0</option>
+              <option value="1">Index 1</option>
+              <option value="2">Index 2</option>
+              <option value="3">Index 3</option>
+              <option value="4">Index 4</option>
+              <option value="5">Index 5</option>
+            </select>
+            <button id="testSystemIndexBtn" type="button">Test Index</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="startCameraBtn">Start / Restart Camera</button>
+          <button id="captureBtn" disabled>Capture</button>
+          <button id="systemCaptureBtn" type="button">Capture via System Camera (Fallback)</button>
+          <button id="autoProbeBtn" type="button">Auto Find Working Camera</button>
+          <button id="autoCaptureBtn" type="button">Auto Capture Best Camera</button>
+        </div>
+      </article>
+
+      <article class="card upload-card">
+        <h2>Upload</h2>
+        <label for="uploadInput" class="dropzone">
+          <input id="uploadInput" type="file" accept="image/*">
+          <span>Choose an image from your device</span>
+        </label>
+        <img id="previewImage" alt="Selected preview">
+        <div class="actions">
+          <button id="analyzeBtn" disabled>Analyze Photo</button>
+        </div>
+      </article>
+
+      <article class="card results-card">
+        <h2>Results</h2>
+        <div id="scorePill" class="score-pill">Score: --</div>
+        <ul id="tipsList" class="tips-list">
+          <li>Analyze a photo to get tailored suggestions.</li>
+        </ul>
+        <dl id="metricsGrid" class="metrics-grid"></dl>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

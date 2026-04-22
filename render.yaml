@@ -1,0 +1,16 @@
+# Render deployment configuration
+# Docs: https://render.com/docs/render-yaml-reference
+
+services:
+  - type: web
+    name: photo-coach-api
+    runtime: python
+    # Render looks for a Python version file or defaults to latest stable.
+    # Pin to 3.11 for maximum package compatibility with opencv-python.
+    pythonVersion: "3.11"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app
+    # Render injects PORT automatically; the app reads it in web_app.py.
+    envVars:
+      - key: PYTHON_ENV
+        value: production
