@@ -11,7 +11,7 @@
 //
 // Leave PRODUCTION_API_URL as an empty string until you have a Render URL.
 // ---------------------------------------------------------------------------
-const PRODUCTION_API_URL = "";  // TODO: replace with your Render URL after deploying
+const https://photo-coach-j95a.onrender.com = "";  // TODO: replace with your Render URL after deploying
 
 const API_BASE =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
