@@ -5,10 +5,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
 import cv2
 from flask import Flask, jsonify, render_template, request
-from flask_cors import CORS
 
 from analyzer import analyze_image
 from suggestions import build_suggestions, calculate_quality_score
@@ -20,14 +21,55 @@ app = Flask(
     __name__,
     template_folder=str(PROJECT_ROOT),
     static_folder=str(PROJECT_ROOT),
-    static_url_path="/static",
+    static_url_path="",
 )
 
 # Allow the GitHub Pages frontend to call the /api endpoints.
 # In production the CORS_ORIGIN env var should be set to your GitHub Pages URL,
 # e.g. https://yourusername.github.io  — leave unset for local dev (allows all).
-_cors_origin = os.environ.get("CORS_ORIGIN", "*")
-CORS(app, resources={r"/api/*": {"origins": _cors_origin}})
+_raw_cors_origin = os.environ.get("CORS_ORIGIN", "*").strip()
+
+
+def _normalize_origin(value: str) -> str:
+    """Convert URL-like strings to scheme://host[:port] origin format."""
+    clean = value.strip().rstrip("/")
+    if not clean or clean == "*":
+        return clean
+
+    parsed = urlsplit(clean)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return clean
+
+
+if _raw_cors_origin == "*":
+    _allowed_origins: str | set[str] = "*"
+else:
+    _allowed_origins = {
+        _normalize_origin(item)
+        for item in _raw_cors_origin.split(",")
+        if item.strip()
+    }
+
+
+@app.before_request
+def handle_cors_preflight():
+    if request.method == "OPTIONS" and request.path.startswith("/api/"):
+        return ("", 204)
+
+
+@app.after_request
+def add_cors_headers(response):
+    if request.path.startswith("/api/"):
+        request_origin = _normalize_origin(request.headers.get("Origin", ""))
+        if _allowed_origins == "*":
+            response.headers["Access-Control-Allow-Origin"] = request_origin or "*"
+        elif request_origin in _allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = request_origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Vary"] = "Origin"
+    return response
 
 CONFIG_PATH = PROJECT_ROOT / "js" / "config.json"
 
@@ -61,7 +103,7 @@ def build_analysis_payload(image_path: Path) -> dict:
     }
 
 
-def capture_directshow_frame(camera_index: int) -> tuple[bool, str, any]:
+def capture_directshow_frame(camera_index: int) -> tuple[bool, str, Any]:
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not cap.isOpened():
         return False, f"System camera index {camera_index} could not be opened via DirectShow.", None
@@ -113,6 +155,7 @@ def index() -> str:
 
 @app.post("/api/analyze")
 def analyze_upload():
+    tmp_path: Path | None = None
     if "photo" not in request.files:
         return jsonify({"error": "Missing file field 'photo'."}), 400
 
@@ -131,13 +174,14 @@ def analyze_upload():
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": str(exc)}), 500
     finally:
-        if "tmp_path" in locals() and tmp_path.exists():
+        if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
 
 
 @app.post("/api/capture-system")
 def capture_from_system_camera():
     """Capture one frame using OpenCV DirectShow (Windows fallback path)."""
+    tmp_path: Path | None = None
     try:
         body = request.get_json(silent=True) or {}
         camera_index = int(body.get("camera_index", 0))
@@ -169,7 +213,7 @@ def capture_from_system_camera():
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": str(exc)}), 500
     finally:
-        if "tmp_path" in locals() and tmp_path.exists():
+        if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
 
 
