@@ -139,6 +139,10 @@ video,
   background: #d7d7d7;
 }
 
+#cameraFeed {
+  transform: scaleX(-1);
+}
+
 #previewImage {
   display: none;
   margin-top: 10px;
