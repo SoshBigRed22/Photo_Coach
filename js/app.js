@@ -1,320 +1,604 @@
-from __future__ import annotations
+// ---------------------------------------------------------------------------
+// API base URL configuration
+// ---------------------------------------------------------------------------
+// When running locally via Flask (http://127.0.0.1:5000), the frontend and
+// backend are on the same server, so relative paths work fine (API_BASE = "").
+//
+// When hosted on GitHub Pages the frontend is served from GitHub but the
+// Python backend lives on Render.  Replace the placeholder below with your
+// actual Render service URL after deploying, e.g.:
+//   "https://photo-coach-api.onrender.com"
+//
+// Leave PRODUCTION_API_URL as an empty string until you have a Render URL.
+// ---------------------------------------------------------------------------
+const PRODUCTION_API_URL = "https://photo-coach-j95a.onrender.com";  // TODO: replace with your Render URL after deploying
 
-import base64
-import json
-import os
-import tempfile
-from pathlib import Path
-from typing import Any
+const IS_LOCALHOST = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
-import cv2
-from flask import Flask, jsonify, render_template, request
+const API_BASE =
+  IS_LOCALHOST
+    ? ""               // local dev  — use relative paths (Flask serves everything)
+    : PRODUCTION_API_URL; // GitHub Pages — point to Render backend
 
-from analyzer import analyze_image
-from suggestions import build_suggestions, calculate_quality_score
+const startCameraBtn = document.getElementById("startCameraBtn");
+const refreshCamerasBtn = document.getElementById("refreshCamerasBtn");
+const cameraSelect = document.getElementById("cameraSelect");
+const cameraStatus = document.getElementById("cameraStatus");
+const systemCaptureBtn = document.getElementById("systemCaptureBtn");
+const systemCameraIndex = document.getElementById("systemCameraIndex");
+const testSystemIndexBtn = document.getElementById("testSystemIndexBtn");
+const autoProbeBtn = document.getElementById("autoProbeBtn");
+const autoCaptureBtn = document.getElementById("autoCaptureBtn");
+const captureBtn = document.getElementById("captureBtn");
+const analyzeBtn = document.getElementById("analyzeBtn");
+const uploadInput = document.getElementById("uploadInput");
+const cameraFeed = document.getElementById("cameraFeed");
+const captureCanvas = document.getElementById("captureCanvas");
+const previewImage = document.getElementById("previewImage");
+const scorePill = document.getElementById("scorePill");
+const tipsList = document.getElementById("tipsList");
+const metricsGrid = document.getElementById("metricsGrid");
 
-BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent
+let activeStream = null;
+let selectedBlob = null;
+let showedHardwareHint = false;
 
-app = Flask(
-    __name__,
-    template_folder=str(PROJECT_ROOT),
-    static_folder=str(PROJECT_ROOT),
-    static_url_path="",
-)
+function setCameraStatus(message) {
+  cameraStatus.textContent = message;
+}
 
-# Allow the GitHub Pages frontend to call the /api endpoints.
-# In production the CORS_ORIGIN env var should be set to your GitHub Pages URL,
-# e.g. https://yourusername.github.io  — leave unset for local dev (allows all).
-_cors_origin = os.environ.get("CORS_ORIGIN", "*")
+function stopActiveStream() {
+  if (!activeStream) return;
+  for (const track of activeStream.getTracks()) {
+    track.stop();
+  }
+  activeStream = null;
+  cameraFeed.srcObject = null;
+}
 
+function isVirtualCameraLabel(label) {
+  const text = label.toLowerCase();
+  return text.includes("virtual") || text.includes("obs") || text.includes("meta quest") || text.includes("snap camera");
+}
 
-@app.before_request
-def handle_cors_preflight():
-    if request.method == "OPTIONS" and request.path.startswith("/api/"):
-        return ("", 204)
+function buildDeviceLabel(device, index) {
+  if (device.label) return device.label;
+  return `Camera ${index + 1}`;
+}
 
+function configureHostedModeUI() {
+  // These controls require a server that has direct access to the user's webcam,
+  // which is not possible when frontend is hosted remotely (GitHub Pages).
+  if (!IS_LOCALHOST) {
+    systemCaptureBtn.disabled = true;
+    testSystemIndexBtn.disabled = true;
+    autoProbeBtn.disabled = true;
+    autoCaptureBtn.disabled = true;
+    systemCaptureBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
+    testSystemIndexBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
+    autoProbeBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
+    autoCaptureBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
+  }
+}
 
-@app.after_request
-def add_cors_headers(response):
-    if request.path.startswith("/api/"):
-        response.headers["Access-Control-Allow-Origin"] = _cors_origin
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return response
+async function populateCameraSelect() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    setCameraStatus("This browser cannot enumerate camera devices.");
+    return;
+  }
 
-CONFIG_PATH = PROJECT_ROOT / "js" / "config.json"
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videoDevices = devices.filter((d) => d.kind === "videoinput");
 
+  cameraSelect.innerHTML = "";
 
-def load_thresholds() -> dict:
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
+  if (videoDevices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No camera detected yet";
+    cameraSelect.appendChild(option);
+    cameraSelect.disabled = false;
+    setCameraStatus("No camera listed yet. Click Start Camera to request permission, then Refresh.");
+    return;
+  }
 
+  cameraSelect.disabled = false;
 
-def build_analysis_payload(image_path: Path) -> dict:
-    thresholds = load_thresholds()
-    result = analyze_image(image_path)
-    tips = build_suggestions(result, thresholds)
-    score = calculate_quality_score(result, thresholds)
+  const physicalFirst = [...videoDevices].sort((a, b) => {
+    const aVirtual = isVirtualCameraLabel(a.label || "") ? 1 : 0;
+    const bVirtual = isVirtualCameraLabel(b.label || "") ? 1 : 0;
+    return aVirtual - bVirtual;
+  });
 
-    return {
-        "score": score,
-        "metrics": {
-            "brightness": round(result.brightness, 2),
-            "contrast": round(result.contrast, 2),
-            "blur_score": round(result.blur_score, 2),
-            "noise_score": round(result.noise_score, 2),
-            "width": result.width,
-            "height": result.height,
-            "face_count": result.face_count,
-            "face_area_ratio": round(result.primary_face_area_ratio, 4),
-            "face_center_offset": round(result.primary_face_center_offset, 4),
-            "face_sharpness": round(result.face_sharpness, 2),
-        },
-        "tips": tips,
+  for (let i = 0; i < physicalFirst.length; i += 1) {
+    const device = physicalFirst[i];
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = buildDeviceLabel(device, i);
+    cameraSelect.appendChild(option);
+  }
+
+  const preferred = physicalFirst.find((d) => !isVirtualCameraLabel(d.label || ""));
+  if (preferred) {
+    cameraSelect.value = preferred.deviceId;
+  }
+
+  setCameraStatus(`Detected ${videoDevices.length} camera device(s). Selected: ${cameraSelect.options[cameraSelect.selectedIndex].text}`);
+}
+
+function showBlockedCameraHint(reason) {
+  if (showedHardwareHint) return;
+  showedHardwareHint = true;
+
+  alert(
+    "Camera stream started, but video looks blocked (" + reason + ").\n\n" +
+    "This is usually a hardware/privacy block on HP laptops. Try:\n" +
+    "1. Open the physical camera shutter if your model has one.\n" +
+    "2. Press the keyboard camera privacy key (camera icon key, often F8/F10) to re-enable camera video.\n" +
+    "3. Close Teams/Zoom/OBS virtual camera apps.\n" +
+    "4. Test in the Windows Camera app. If it is black there too, it is a device/privacy issue, not this website."
+  );
+}
+
+function diagnoseCameraFrames() {
+  const track = activeStream?.getVideoTracks?.()[0];
+  if (!track) return;
+
+  console.log("[PhotoCoach] Track state:", {
+    readyState: track.readyState,
+    muted: track.muted,
+    label: track.label
+  });
+
+  if (track.muted) {
+    showBlockedCameraHint("track muted");
+    return;
+  }
+
+  setTimeout(() => {
+    if (!cameraFeed.videoWidth || !cameraFeed.videoHeight) {
+      showBlockedCameraHint("no video frames");
+      return;
     }
 
+    const probeCanvas = document.createElement("canvas");
+    probeCanvas.width = Math.min(160, cameraFeed.videoWidth);
+    probeCanvas.height = Math.min(120, cameraFeed.videoHeight);
+    const probeCtx = probeCanvas.getContext("2d");
+    if (!probeCtx) return;
 
-def capture_directshow_frame(camera_index: int) -> tuple[bool, str, Any]:
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        return False, f"System camera index {camera_index} could not be opened via DirectShow.", None
+    probeCtx.drawImage(cameraFeed, 0, 0, probeCanvas.width, probeCanvas.height);
+    const data = probeCtx.getImageData(0, 0, probeCanvas.width, probeCanvas.height).data;
 
-    for _ in range(8):
-        cap.read()
+    let sum = 0;
+    let sumSq = 0;
+    let count = 0;
 
-    ok, frame = cap.read()
-    cap.release()
-
-    if not ok or frame is None:
-        return False, f"System camera capture failed at index {camera_index}.", None
-
-    return True, "ok", frame
-
-
-def capture_frame_with_backend(camera_index: int, backend: int):
-    cap = cv2.VideoCapture(camera_index, backend)
-    if not cap.isOpened():
-        return False, "open_failed", None
-
-    for _ in range(10):
-        cap.read()
-
-    ok, frame = cap.read()
-    cap.release()
-    if not ok or frame is None:
-        return False, "read_failed", None
-    return True, "ok", frame
-
-
-def frame_probe(frame) -> dict:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return {
-        "mean": round(float(gray.mean()), 2),
-        "variance": round(float(gray.var()), 2),
+    for (let i = 0; i < data.length; i += 16) {
+      const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      sum += gray;
+      sumSq += gray * gray;
+      count += 1;
     }
 
+    const mean = sum / Math.max(1, count);
+    const variance = (sumSq / Math.max(1, count)) - (mean * mean);
+    console.log("[PhotoCoach] Frame probe:", { mean, variance });
 
-def is_usable_probe(probe: dict) -> bool:
-    # Heuristic: pure-black or near-static feeds are unusable for capture.
-    return probe["mean"] > 8 and probe["variance"] > 25
+    if (mean < 8 && variance < 25) {
+      showBlockedCameraHint("black frames");
+    }
+  }, 1200);
+}
 
+function scoreClass(score) {
+  if (score >= 80) return "good";
+  if (score >= 60) return "mid";
+  return "low";
+}
 
-@app.get("/")
-def index() -> str:
-    return render_template("index.html")
+function setScore(score) {
+  scorePill.textContent = `Score: ${score}/100`;
+  const cls = scoreClass(score);
+  scorePill.style.background = cls === "good"
+    ? "rgba(19, 111, 99, 0.14)"
+    : cls === "mid"
+      ? "rgba(207, 106, 50, 0.18)"
+      : "rgba(154, 31, 31, 0.16)";
+}
 
+function renderTips(tips) {
+  tipsList.innerHTML = "";
+  for (const tip of tips) {
+    const li = document.createElement("li");
+    li.textContent = tip;
+    tipsList.appendChild(li);
+  }
+}
 
-@app.post("/api/analyze")
-def analyze_upload():
-    tmp_path: Path | None = None
-    if "photo" not in request.files:
-        return jsonify({"error": "Missing file field 'photo'."}), 400
+function renderMetrics(metrics) {
+  const labels = {
+    brightness: "Brightness",
+    contrast: "Contrast",
+    blur_score: "Blur",
+    noise_score: "Noise",
+    width: "Width",
+    height: "Height",
+    face_count: "Faces",
+    face_area_ratio: "Face area",
+    face_center_offset: "Face offset",
+    face_sharpness: "Face sharpness"
+  };
 
-    uploaded = request.files["photo"]
-    if not uploaded.filename:
-        return jsonify({"error": "No file selected."}), 400
+  metricsGrid.innerHTML = "";
+  for (const [key, value] of Object.entries(metrics)) {
+    const dt = document.createElement("dt");
+    dt.textContent = labels[key] || key;
 
-    suffix = Path(uploaded.filename).suffix or ".jpg"
+    const dd = document.createElement("dd");
+    dd.textContent = String(value);
 
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp_path = Path(tmp.name)
-            uploaded.save(tmp_path)
+    metricsGrid.appendChild(dt);
+    metricsGrid.appendChild(dd);
+  }
+}
 
-        return jsonify(build_analysis_payload(tmp_path))
-    except Exception as exc:  # pragma: no cover
-        return jsonify({"error": str(exc)}), 500
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+function applyAnalysisPayload(payload) {
+  setScore(payload.score);
+  renderTips(payload.tips || []);
+  renderMetrics(payload.metrics || {});
+}
 
+function getSelectedSystemIndex() {
+  const idx = Number.parseInt(systemCameraIndex.value, 10);
+  if (Number.isNaN(idx) || idx < 0) return 0;
+  return idx;
+}
 
-@app.post("/api/capture-system")
-def capture_from_system_camera():
-    """Capture one frame using OpenCV DirectShow (Windows fallback path)."""
-    tmp_path: Path | None = None
-    try:
-        body = request.get_json(silent=True) or {}
-        camera_index = int(body.get("camera_index", 0))
+async function analyzeBlob(blob) {
+  const formData = new FormData();
+  formData.append("photo", blob, "photo.jpg");
 
-        ok, message, frame = capture_directshow_frame(camera_index)
-        if not ok:
-            return jsonify({"error": message}), 500
+  analyzeBtn.disabled = true;
+  analyzeBtn.textContent = "Analyzing...";
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp_path = Path(tmp.name)
-            if not cv2.imwrite(str(tmp_path), frame):
-                return jsonify({"error": "Failed to write captured frame."}), 500
+  try {
+    const response = await fetch(`${API_BASE}/api/analyze`, {
+      method: "POST",
+      body: formData
+    });
 
-        payload = build_analysis_payload(tmp_path)
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Analyze request failed.");
+    }
 
-        encoded_ok, encoded = cv2.imencode(".jpg", frame)
-        if encoded_ok:
-            payload["captured_image_base64"] = base64.b64encode(encoded.tobytes()).decode("ascii")
+    applyAnalysisPayload(payload);
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = "Analyze Photo";
+  }
+}
 
-        payload["camera_index"] = camera_index
+startCameraBtn.addEventListener("click", async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert(
+      "Your browser cannot access the camera on this page.\n\n" +
+      "Make sure you are opening the app at http://127.0.0.1:5000 (not a file:// path).\n" +
+      "You can still upload a photo using the Upload section."
+    );
+    return;
+  }
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        payload["frame_probe"] = {
-            "mean": round(float(gray.mean()), 2),
-            "variance": round(float(gray.var()), 2),
-        }
+  if (!window.isSecureContext) {
+    alert("Camera access requires a secure context (HTTPS). Open the app over https://.");
+    return;
+  }
 
-        return jsonify(payload)
-    except Exception as exc:  # pragma: no cover
-        return jsonify({"error": str(exc)}), 500
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+  try {
+    stopActiveStream();
+    showedHardwareHint = false;
+    console.log("[PhotoCoach] Requesting camera...");
 
+    // Enumerate devices first so we can report exactly what is found.
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === "videoinput");
+    console.log("[PhotoCoach] Video devices found:", videoDevices.length, videoDevices.map(d => d.label || d.deviceId));
 
-@app.post("/api/system-preview")
-def system_preview():
-    """Capture one preview frame from a selected DirectShow camera index."""
-    try:
-        body = request.get_json(silent=True) or {}
-        camera_index = int(body.get("camera_index", 0))
+    if (videoDevices.length === 0) {
+      console.warn("[PhotoCoach] No cameras reported by enumerateDevices. Attempting default camera start anyway.");
+      setCameraStatus("No camera listed yet. Attempting to start default camera...");
+    }
 
-        ok, message, frame = capture_directshow_frame(camera_index)
-        if not ok:
-            return jsonify({"error": message}), 500
+    if (!cameraSelect.options.length) {
+      await populateCameraSelect();
+    }
 
-        encoded_ok, encoded = cv2.imencode(".jpg", frame)
-        if not encoded_ok:
-            return jsonify({"error": "Failed to encode preview frame."}), 500
+    const selectedDeviceId = cameraSelect.value;
+    const selectedName = cameraSelect.options[cameraSelect.selectedIndex]?.text || "camera";
+    setCameraStatus(
+      selectedDeviceId
+        ? `Starting ${selectedName}...`
+        : "Requesting camera permission and starting default camera..."
+    );
 
-        return jsonify(
-            {
-                "camera_index": camera_index,
-                "preview_image_base64": base64.b64encode(encoded.tobytes()).decode("ascii"),
-                "frame_probe": frame_probe(frame),
-            }
-        )
-    except Exception as exc:  # pragma: no cover
-        return jsonify({"error": str(exc)}), 500
+    const videoConstraints = {
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      frameRate: { ideal: 30 }
+    };
 
+    activeStream = await navigator.mediaDevices.getUserMedia({
+      video: selectedDeviceId ? { ...videoConstraints, deviceId: { exact: selectedDeviceId } } : videoConstraints,
+      audio: false
+    });
+    console.log("[PhotoCoach] Stream acquired:", activeStream.getVideoTracks().map(t => t.label));
 
-@app.post("/api/system-autoprobe")
-def system_autoprobe():
-    """Probe multiple camera indices/backends and return candidates with frame stats."""
-    body = request.get_json(silent=True) or {}
-    max_index = int(body.get("max_index", 10))
-    max_index = max(0, min(max_index, 20))
+    await populateCameraSelect();
+    const activeTrack = activeStream.getVideoTracks()[0];
+    const activeDeviceId = activeTrack?.getSettings?.().deviceId;
+    if (activeDeviceId) {
+      cameraSelect.value = activeDeviceId;
+    }
 
-    backends = [
-        ("DSHOW", cv2.CAP_DSHOW),
-        ("MSMF", cv2.CAP_MSMF),
-    ]
+    cameraFeed.srcObject = activeStream;
 
-    candidates = []
-    best = None
+    // Explicitly call play() — some browsers need this even with autoplay attribute.
+    try {
+      await cameraFeed.play();
+      console.log("[PhotoCoach] Video playback started.");
+      diagnoseCameraFrames();
+      const liveName = activeTrack?.label || cameraSelect.options[cameraSelect.selectedIndex]?.text || "camera";
+      setCameraStatus(`Live: ${liveName}`);
+    } catch (playErr) {
+      console.warn("[PhotoCoach] play() failed:", playErr);
+      setCameraStatus("Stream opened, but playback did not start. Try Start / Restart Camera again.");
+    }
 
-    for backend_name, backend in backends:
-        for idx in range(max_index + 1):
-            ok, status, frame = capture_frame_with_backend(idx, backend)
-            if not ok:
-                candidates.append(
-                    {
-                        "backend": backend_name,
-                        "camera_index": idx,
-                        "status": status,
-                    }
-                )
-                continue
+    startCameraBtn.textContent = "Start / Restart Camera";
+    captureBtn.disabled = false;
+  } catch (error) {
+    console.error("[PhotoCoach] Camera error:", error.name, error.message);
 
-            probe = frame_probe(frame)
-            usable = is_usable_probe(probe)
-            candidate = {
-                "backend": backend_name,
-                "camera_index": idx,
-                "status": "ok",
-                "probe": probe,
-                "usable": usable,
-            }
-            candidates.append(candidate)
+    let message = `Camera error: ${error.name}\n\n`;
 
-            if usable:
-                if best is None or probe["variance"] > best["probe"]["variance"]:
-                    best = candidate
+    if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+      message +=
+        "The browser was denied permission.\n\n" +
+        "Fix steps:\n" +
+        "1. In your browser address bar, click the camera/lock icon and choose Allow.\n" +
+        "2. Reload the page, then try again.\n" +
+        "3. If it still fails, check Windows Settings → Privacy & Security → Camera and make sure your browser is listed and toggled On.";
+    } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+      message += "No usable camera was found. Try the Upload section instead.";
+    } else if (error.name === "NotReadableError" || error.name === "TrackStartError") {
+      message +=
+        "The camera is already being used by another app (e.g. Teams, Zoom, Snap Camera).\n" +
+        "Close those apps, then reload this page and try again.";
+    } else if (error.name === "OverconstrainedError") {
+      message += "Camera rejected the requested settings. This should not happen — please reload and retry.";
+    } else {
+      message += error.message + "\n\nOpen browser DevTools (F12 → Console) and look for [PhotoCoach] lines for more detail.";
+    }
 
-    return jsonify(
-        {
-            "best": best,
-            "candidates": candidates,
-        }
-    )
+    setCameraStatus(`Failed to start camera: ${error.name}`);
+    alert(message);
+  }
+});
 
+systemCaptureBtn.addEventListener("click", async () => {
+  systemCaptureBtn.disabled = true;
+  systemCaptureBtn.textContent = "Capturing...";
+  const selectedIndex = getSelectedSystemIndex();
+  setCameraStatus(`Using backend DirectShow capture fallback (index ${selectedIndex})...`);
 
-@app.post("/api/capture-system-auto")
-def capture_system_auto():
-    """Auto-select the most usable camera feed and capture a frame."""
-    body = request.get_json(silent=True) or {}
-    max_index = int(body.get("max_index", 10))
-    max_index = max(0, min(max_index, 20))
+  try {
+    const response = await fetch(`${API_BASE}/api/capture-system`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_index: selectedIndex })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Fallback capture failed.");
+    }
 
-    best = None
-    for backend_name, backend in [("DSHOW", cv2.CAP_DSHOW), ("MSMF", cv2.CAP_MSMF)]:
-        for idx in range(max_index + 1):
-            ok, _, frame = capture_frame_with_backend(idx, backend)
-            if not ok:
-                continue
+    if (payload.captured_image_base64) {
+      previewImage.src = `data:image/jpeg;base64,${payload.captured_image_base64}`;
+      previewImage.style.display = "block";
+    }
 
-            probe = frame_probe(frame)
-            if not is_usable_probe(probe):
-                continue
+    applyAnalysisPayload(payload);
+    analyzeBtn.disabled = false;
+    const probe = payload.frame_probe || {};
+    setCameraStatus(`Fallback capture succeeded at index ${payload.camera_index}. Probe mean=${probe.mean}, var=${probe.variance}`);
+  } catch (error) {
+    console.error("[PhotoCoach] Fallback capture error:", error);
+    setCameraStatus("Fallback capture failed.");
+    alert(
+      "Fallback capture failed.\n\n" +
+      "Please close apps using the webcam (Teams/Zoom/OBS/virtual cams), then try again.\n" +
+      "Error: " + error.message
+    );
+  } finally {
+    systemCaptureBtn.disabled = false;
+    systemCaptureBtn.textContent = "Capture via System Camera (Fallback)";
+  }
+});
 
-            if best is None or probe["variance"] > best["probe"]["variance"]:
-                best = {
-                    "backend": backend_name,
-                    "camera_index": idx,
-                    "probe": probe,
-                    "frame": frame,
-                }
+testSystemIndexBtn.addEventListener("click", async () => {
+  const selectedIndex = getSelectedSystemIndex();
+  testSystemIndexBtn.disabled = true;
+  testSystemIndexBtn.textContent = "Testing...";
+  setCameraStatus(`Testing system camera index ${selectedIndex}...`);
 
-    if best is None:
-        return jsonify({"error": "No usable camera feed found. All detected frames appear black/blocked."}), 500
+  try {
+    const response = await fetch(`${API_BASE}/api/system-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_index: selectedIndex })
+    });
 
-    frame = best.pop("frame")
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "System preview failed.");
+    }
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        tmp_path = Path(tmp.name)
-        if not cv2.imwrite(str(tmp_path), frame):
-            return jsonify({"error": "Failed to write captured frame."}), 500
+    if (payload.preview_image_base64) {
+      previewImage.src = `data:image/jpeg;base64,${payload.preview_image_base64}`;
+      previewImage.style.display = "block";
+    }
 
-    try:
-        payload = build_analysis_payload(tmp_path)
-        encoded_ok, encoded = cv2.imencode(".jpg", frame)
-        if encoded_ok:
-            payload["captured_image_base64"] = base64.b64encode(encoded.tobytes()).decode("ascii")
+    const probe = payload.frame_probe || {};
+    setCameraStatus(`Index ${payload.camera_index} preview OK. Probe mean=${probe.mean}, var=${probe.variance}`);
+  } catch (error) {
+    setCameraStatus(`Index ${selectedIndex} failed.`);
+    alert("System index test failed.\n\n" + error.message);
+  } finally {
+    testSystemIndexBtn.disabled = false;
+    testSystemIndexBtn.textContent = "Test Index";
+  }
+});
 
-        payload["auto_selected"] = best
-        return jsonify(payload)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+autoProbeBtn.addEventListener("click", async () => {
+  autoProbeBtn.disabled = true;
+  autoProbeBtn.textContent = "Scanning...";
+  setCameraStatus("Scanning camera indices/backends for a non-black feed...");
 
+  try {
+    const response = await fetch(`${API_BASE}/api/system-autoprobe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_index: 10 })
+    });
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("PYTHON_ENV") != "production")
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Auto probe failed.");
+    }
+
+    if (!payload.best) {
+      setCameraStatus("No usable camera feed found. Feeds appear blocked/black.");
+      alert(
+        "Auto probe found no usable feed.\n\n" +
+        "This strongly suggests a hardware/privacy camera block. Try toggling your HP camera privacy key and close all apps using camera."
+      );
+      return;
+    }
+
+    const best = payload.best;
+    if (best.backend === "DSHOW") {
+      systemCameraIndex.value = String(best.camera_index);
+    }
+
+    setCameraStatus(`Best feed: ${best.backend} index ${best.camera_index} (var=${best.probe.variance}). Ready to auto capture.`);
+  } catch (error) {
+    setCameraStatus("Auto probe failed.");
+    alert("Auto probe error:\n\n" + error.message);
+  } finally {
+    autoProbeBtn.disabled = false;
+    autoProbeBtn.textContent = "Auto Find Working Camera";
+  }
+});
+
+autoCaptureBtn.addEventListener("click", async () => {
+  autoCaptureBtn.disabled = true;
+  autoCaptureBtn.textContent = "Auto Capturing...";
+  setCameraStatus("Auto-selecting and capturing from best available feed...");
+
+  try {
+    const response = await fetch(`${API_BASE}/api/capture-system-auto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_index: 10 })
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Auto capture failed.");
+    }
+
+    if (payload.captured_image_base64) {
+      previewImage.src = `data:image/jpeg;base64,${payload.captured_image_base64}`;
+      previewImage.style.display = "block";
+    }
+
+    applyAnalysisPayload(payload);
+    analyzeBtn.disabled = false;
+
+    const sel = payload.auto_selected || {};
+    const probe = sel.probe || {};
+    setCameraStatus(`Auto capture succeeded with ${sel.backend} index ${sel.camera_index} (mean=${probe.mean}, var=${probe.variance}).`);
+  } catch (error) {
+    setCameraStatus("Auto capture failed. No usable feed found.");
+    alert("Auto capture failed:\n\n" + error.message);
+  } finally {
+    autoCaptureBtn.disabled = false;
+    autoCaptureBtn.textContent = "Auto Capture Best Camera";
+  }
+});
+
+refreshCamerasBtn.addEventListener("click", async () => {
+  try {
+    await populateCameraSelect();
+  } catch (error) {
+    console.error("[PhotoCoach] enumerateDevices error:", error);
+    setCameraStatus("Could not list cameras. Check browser permissions and reload.");
+  }
+});
+
+cameraSelect.addEventListener("change", () => {
+  if (cameraSelect.selectedIndex >= 0) {
+    setCameraStatus(`Selected: ${cameraSelect.options[cameraSelect.selectedIndex].text}`);
+  }
+});
+
+captureBtn.addEventListener("click", async () => {
+  if (!cameraFeed.videoWidth || !cameraFeed.videoHeight) return;
+
+  captureCanvas.width = cameraFeed.videoWidth;
+  captureCanvas.height = cameraFeed.videoHeight;
+  const ctx = captureCanvas.getContext("2d");
+  
+  // Flip camera horizontally (mirror image)
+  ctx.scale(-1, 1);
+  ctx.drawImage(cameraFeed, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
+
+  const blob = await new Promise((resolve) => captureCanvas.toBlob(resolve, "image/jpeg", 0.95));
+  if (!blob) return;
+
+  selectedBlob = blob;
+  previewImage.src = URL.createObjectURL(blob);
+  previewImage.style.display = "block";
+  analyzeBtn.disabled = false;
+});
+
+uploadInput.addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  selectedBlob = file;
+  previewImage.src = URL.createObjectURL(file);
+  previewImage.style.display = "block";
+  analyzeBtn.disabled = false;
+});
+
+analyzeBtn.addEventListener("click", async () => {
+  if (!selectedBlob) {
+    alert("Capture or upload a photo first.");
+    return;
+  }
+  await analyzeBlob(selectedBlob);
+});
+
+configureHostedModeUI();
+populateCameraSelect().catch((error) => {
+  console.error("[PhotoCoach] initial camera scan error:", error);
+  setCameraStatus("Could not scan camera devices yet. Click Refresh.");
+});
+
+window.addEventListener("beforeunload", () => {
+  stopActiveStream();
+});
