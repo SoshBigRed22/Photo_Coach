@@ -28,7 +28,10 @@
           </div>
           <p id="cameraStatus" class="camera-status">Click Refresh to list camera devices.</p>
         </div>
-        <video id="cameraFeed" autoplay muted></video>
+        <div class="camera-stage">
+          <video id="cameraFeed" autoplay muted></video>
+          <canvas id="faceOverlay" aria-hidden="true"></canvas>
+        </div>
         <canvas id="captureCanvas" hidden></canvas>
         <div class="camera-controls system-controls">
           <label for="systemCameraIndex">System Camera Index (fallback)</label>
