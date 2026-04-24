@@ -178,6 +178,50 @@ def analyze_upload():
             tmp_path.unlink(missing_ok=True)
 
 
+@app.post("/api/track-face")
+def track_face_box():
+    """Detect a primary face in a frame and return its bounding box."""
+    tmp_path: Path | None = None
+    if "photo" not in request.files:
+        return jsonify({"error": "Missing file field 'photo'."}), 400
+
+    uploaded = request.files["photo"]
+    if not uploaded.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    suffix = Path(uploaded.filename).suffix or ".jpg"
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            uploaded.save(tmp_path)
+
+        result = analyze_image(tmp_path)
+        box = result.primary_face_box
+        payload = {
+            "face_detected": bool(result.face_count > 0 and box is not None),
+            "frame_width": result.width,
+            "frame_height": result.height,
+            "face_box": None,
+        }
+
+        if box is not None:
+            x, y, w, h = box
+            payload["face_box"] = {
+                "x": int(x),
+                "y": int(y),
+                "width": int(w),
+                "height": int(h),
+            }
+
+        return jsonify(payload)
+    except Exception as exc:  # pragma: no cover
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
 @app.post("/api/capture-system")
 def capture_from_system_camera():
     """Capture one frame using OpenCV DirectShow (Windows fallback path)."""
