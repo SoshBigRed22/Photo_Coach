@@ -44,12 +44,16 @@ const supportsFaceDetector = typeof FaceDetector !== "undefined";
 const faceDetector = supportsFaceDetector
   ? new FaceDetector({ maxDetectedFaces: 1, fastMode: true })
   : null;
+const serverTrackingCanvas = document.createElement("canvas");
 
 let activeStream = null;
 let selectedBlob = null;
 let showedHardwareHint = false;
 let faceTrackingActive = false;
 let faceTrackingRafId = null;
+let faceTrackingMode = "none";
+let serverFaceTrackingTimer = null;
+let serverFaceTrackingBusy = false;
 
 function setCameraStatus(message) {
   cameraStatus.textContent = message;
@@ -74,10 +78,16 @@ function clearFaceOverlay() {
 
 function stopFaceTracking() {
   faceTrackingActive = false;
+  faceTrackingMode = "none";
   if (faceTrackingRafId !== null) {
     cancelAnimationFrame(faceTrackingRafId);
     faceTrackingRafId = null;
   }
+  if (serverFaceTrackingTimer !== null) {
+    clearInterval(serverFaceTrackingTimer);
+    serverFaceTrackingTimer = null;
+  }
+  serverFaceTrackingBusy = false;
   clearFaceOverlay();
 }
 
@@ -161,14 +171,101 @@ async function runFaceTrackingLoop() {
   faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
 }
 
+async function pollServerFaceTracking() {
+  if (!faceTrackingActive || faceTrackingMode !== "server" || !activeStream || !faceOverlay) return;
+  if (serverFaceTrackingBusy || cameraFeed.readyState < 2 || !cameraFeed.videoWidth || !cameraFeed.videoHeight) return;
+
+  const displayWidth = Math.round(faceOverlay.clientWidth);
+  const displayHeight = Math.round(faceOverlay.clientHeight);
+  if (displayWidth <= 0 || displayHeight <= 0) return;
+
+  if (faceOverlay.width !== displayWidth || faceOverlay.height !== displayHeight) {
+    faceOverlay.width = displayWidth;
+    faceOverlay.height = displayHeight;
+  }
+
+  const sampleWidth = Math.min(640, cameraFeed.videoWidth);
+  const sampleHeight = Math.round((sampleWidth / cameraFeed.videoWidth) * cameraFeed.videoHeight);
+  serverTrackingCanvas.width = sampleWidth;
+  serverTrackingCanvas.height = sampleHeight;
+
+  const ctx = serverTrackingCanvas.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(cameraFeed, 0, 0, sampleWidth, sampleHeight);
+
+  const blob = await new Promise((resolve) => {
+    serverTrackingCanvas.toBlob(resolve, "image/jpeg", 0.75);
+  });
+  if (!blob) return;
+
+  const formData = new FormData();
+  formData.append("photo", blob, "frame.jpg");
+
+  serverFaceTrackingBusy = true;
+  try {
+    const response = await fetch(`${API_BASE}/api/track-face`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      clearFaceOverlay();
+      return;
+    }
+
+    const payload = await response.json();
+    if (!payload.face_detected || !payload.face_box) {
+      clearFaceOverlay();
+      return;
+    }
+
+    const mapped = mapBoundingBoxToDisplay(
+      payload.face_box,
+      payload.frame_width,
+      payload.frame_height,
+      displayWidth,
+      displayHeight,
+      true
+    );
+    drawFaceBox(mapped);
+  } catch {
+    clearFaceOverlay();
+  } finally {
+    serverFaceTrackingBusy = false;
+  }
+}
+
+function startServerFaceTracking() {
+  stopFaceTracking();
+  faceTrackingActive = true;
+  faceTrackingMode = "server";
+  void pollServerFaceTracking();
+  serverFaceTrackingTimer = setInterval(() => {
+    void pollServerFaceTracking();
+  }, 350);
+}
+
 function startFaceTracking() {
-  if (!supportsFaceDetector || !faceOverlay) {
+  if (!faceOverlay) {
     clearFaceOverlay();
     return;
   }
-  stopFaceTracking();
-  faceTrackingActive = true;
-  faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
+
+  if (supportsFaceDetector) {
+    stopFaceTracking();
+    faceTrackingActive = true;
+    faceTrackingMode = "local";
+    faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
+    return;
+  }
+
+  if (!API_BASE) {
+    console.warn("[PhotoCoach] Face tracking unavailable: FaceDetector not supported and no API base configured for fallback.");
+    clearFaceOverlay();
+    return;
+  }
+
+  console.warn("[PhotoCoach] FaceDetector unavailable. Using backend face tracking fallback.");
+  startServerFaceTracking();
 }
 
 function isVirtualCameraLabel(label) {
