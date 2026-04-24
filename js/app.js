@@ -33,27 +33,142 @@ const captureBtn = document.getElementById("captureBtn");
 const analyzeBtn = document.getElementById("analyzeBtn");
 const uploadInput = document.getElementById("uploadInput");
 const cameraFeed = document.getElementById("cameraFeed");
+const faceOverlay = document.getElementById("faceOverlay");
 const captureCanvas = document.getElementById("captureCanvas");
 const previewImage = document.getElementById("previewImage");
 const scorePill = document.getElementById("scorePill");
 const tipsList = document.getElementById("tipsList");
 const metricsGrid = document.getElementById("metricsGrid");
 
+const supportsFaceDetector = typeof FaceDetector !== "undefined";
+const faceDetector = supportsFaceDetector
+  ? new FaceDetector({ maxDetectedFaces: 1, fastMode: true })
+  : null;
+
 let activeStream = null;
 let selectedBlob = null;
 let showedHardwareHint = false;
+let faceTrackingActive = false;
+let faceTrackingRafId = null;
 
 function setCameraStatus(message) {
   cameraStatus.textContent = message;
 }
 
 function stopActiveStream() {
+  stopFaceTracking();
   if (!activeStream) return;
   for (const track of activeStream.getTracks()) {
     track.stop();
   }
   activeStream = null;
   cameraFeed.srcObject = null;
+}
+
+function clearFaceOverlay() {
+  if (!faceOverlay) return;
+  const ctx = faceOverlay.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
+}
+
+function stopFaceTracking() {
+  faceTrackingActive = false;
+  if (faceTrackingRafId !== null) {
+    cancelAnimationFrame(faceTrackingRafId);
+    faceTrackingRafId = null;
+  }
+  clearFaceOverlay();
+}
+
+function mapBoundingBoxToDisplay(box, srcWidth, srcHeight, displayWidth, displayHeight, mirrored) {
+  const scale = Math.max(displayWidth / srcWidth, displayHeight / srcHeight);
+  const renderedWidth = srcWidth * scale;
+  const renderedHeight = srcHeight * scale;
+  const offsetX = (displayWidth - renderedWidth) / 2;
+  const offsetY = (displayHeight - renderedHeight) / 2;
+
+  let x = (box.x * scale) + offsetX;
+  const y = (box.y * scale) + offsetY;
+  const width = box.width * scale;
+  const height = box.height * scale;
+
+  if (mirrored) {
+    x = displayWidth - (x + width);
+  }
+
+  return {
+    x: Math.max(0, x),
+    y: Math.max(0, y),
+    width: Math.max(0, Math.min(width, displayWidth)),
+    height: Math.max(0, Math.min(height, displayHeight)),
+  };
+}
+
+function drawFaceBox(box) {
+  if (!faceOverlay) return;
+  const ctx = faceOverlay.getContext("2d");
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(19, 111, 99, 0.95)";
+  ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+}
+
+async function runFaceTrackingLoop() {
+  if (!faceTrackingActive || !faceDetector || !activeStream || !faceOverlay) {
+    faceTrackingRafId = null;
+    return;
+  }
+
+  const displayWidth = Math.round(faceOverlay.clientWidth);
+  const displayHeight = Math.round(faceOverlay.clientHeight);
+
+  if (displayWidth <= 0 || displayHeight <= 0 || cameraFeed.readyState < 2) {
+    clearFaceOverlay();
+    faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
+    return;
+  }
+
+  if (faceOverlay.width !== displayWidth || faceOverlay.height !== displayHeight) {
+    faceOverlay.width = displayWidth;
+    faceOverlay.height = displayHeight;
+  }
+
+  try {
+    const faces = await faceDetector.detect(cameraFeed);
+    if (!faces.length || !faces[0].boundingBox || !cameraFeed.videoWidth || !cameraFeed.videoHeight) {
+      clearFaceOverlay();
+    } else {
+      const box = mapBoundingBoxToDisplay(
+        faces[0].boundingBox,
+        cameraFeed.videoWidth,
+        cameraFeed.videoHeight,
+        displayWidth,
+        displayHeight,
+        true
+      );
+      drawFaceBox(box);
+    }
+  } catch {
+    // Some browsers intermittently throw during track state transitions.
+    clearFaceOverlay();
+  }
+
+  faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
+}
+
+function startFaceTracking() {
+  if (!supportsFaceDetector || !faceOverlay) {
+    clearFaceOverlay();
+    return;
+  }
+  stopFaceTracking();
+  faceTrackingActive = true;
+  faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
 }
 
 function isVirtualCameraLabel(label) {
@@ -349,10 +464,12 @@ startCameraBtn.addEventListener("click", async () => {
     try {
       await cameraFeed.play();
       console.log("[PhotoCoach] Video playback started.");
+      startFaceTracking();
       diagnoseCameraFrames();
       const liveName = activeTrack?.label || cameraSelect.options[cameraSelect.selectedIndex]?.text || "camera";
       setCameraStatus(`Live: ${liveName}`);
     } catch (playErr) {
+      stopFaceTracking();
       console.warn("[PhotoCoach] play() failed:", playErr);
       setCameraStatus("Stream opened, but playback did not start. Try Start / Restart Camera again.");
     }
@@ -561,7 +678,8 @@ captureBtn.addEventListener("click", async () => {
   captureCanvas.width = cameraFeed.videoWidth;
   captureCanvas.height = cameraFeed.videoHeight;
   const ctx = captureCanvas.getContext("2d");
-  
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   // Flip camera horizontally (mirror image)
   ctx.scale(-1, 1);
   ctx.drawImage(cameraFeed, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
