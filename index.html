@@ -28,6 +28,22 @@
           </div>
           <p id="cameraStatus" class="camera-status">Click Refresh to list camera devices.</p>
         </div>
+        <div class="camera-controls filter-controls">
+          <label for="filterSelect">Try-On Overlay</label>
+          <select id="filterSelect">
+            <option value="none">None</option>
+            <option value="septum">Septum Ring</option>
+            <option value="nose-stud-left">Nose Stud (Left)</option>
+            <option value="brow-left">Brow Ring (Left)</option>
+            <option value="earring-left">Hoop Earring (Left)</option>
+            <option value="earring-right">Hoop Earring (Right)</option>
+          </select>
+          <div class="filter-size-row">
+            <label for="filterSize">Overlay Size</label>
+            <input id="filterSize" type="range" min="70" max="150" step="1" value="100">
+            <span id="filterSizeValue">100%</span>
+          </div>
+        </div>
         <div class="camera-stage">
           <video id="cameraFeed" autoplay muted></video>
           <canvas id="faceOverlay" aria-hidden="true"></canvas>
