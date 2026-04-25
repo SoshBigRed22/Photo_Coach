@@ -54,6 +54,8 @@ let faceTrackingRafId = null;
 let faceTrackingMode = "none";
 let serverFaceTrackingTimer = null;
 let serverFaceTrackingBusy = false;
+let lastTrackedBox = null;
+let missedTrackingFrames = 0;
 
 function setCameraStatus(message) {
   cameraStatus.textContent = message;
@@ -76,6 +78,11 @@ function clearFaceOverlay() {
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
 }
 
+function resetTrackingVisualState() {
+  lastTrackedBox = null;
+  missedTrackingFrames = 0;
+}
+
 function stopFaceTracking() {
   faceTrackingActive = false;
   faceTrackingMode = "none";
@@ -88,6 +95,7 @@ function stopFaceTracking() {
     serverFaceTrackingTimer = null;
   }
   serverFaceTrackingBusy = false;
+  resetTrackingVisualState();
   clearFaceOverlay();
 }
 
@@ -120,12 +128,24 @@ function drawFaceBox(box) {
   const ctx = faceOverlay.getContext("2d");
   if (!ctx) return;
 
+  const drawBox = lastTrackedBox
+    ? {
+        x: (lastTrackedBox.x * 0.65) + (box.x * 0.35),
+        y: (lastTrackedBox.y * 0.65) + (box.y * 0.35),
+        width: (lastTrackedBox.width * 0.65) + (box.width * 0.35),
+        height: (lastTrackedBox.height * 0.65) + (box.height * 0.35),
+      }
+    : box;
+
+  lastTrackedBox = drawBox;
+  missedTrackingFrames = 0;
+
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(19, 111, 99, 0.95)";
   ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
-  ctx.strokeRect(box.x, box.y, box.width, box.height);
-  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(drawBox.x, drawBox.y, drawBox.width, drawBox.height);
+  ctx.fillRect(drawBox.x, drawBox.y, drawBox.width, drawBox.height);
 }
 
 async function runFaceTrackingLoop() {
@@ -184,7 +204,7 @@ async function pollServerFaceTracking() {
     faceOverlay.height = displayHeight;
   }
 
-  const sampleWidth = Math.min(640, cameraFeed.videoWidth);
+  const sampleWidth = Math.min(480, cameraFeed.videoWidth);
   const sampleHeight = Math.round((sampleWidth / cameraFeed.videoWidth) * cameraFeed.videoHeight);
   serverTrackingCanvas.width = sampleWidth;
   serverTrackingCanvas.height = sampleHeight;
@@ -194,7 +214,7 @@ async function pollServerFaceTracking() {
   ctx.drawImage(cameraFeed, 0, 0, sampleWidth, sampleHeight);
 
   const blob = await new Promise((resolve) => {
-    serverTrackingCanvas.toBlob(resolve, "image/jpeg", 0.75);
+    serverTrackingCanvas.toBlob(resolve, "image/jpeg", 0.65);
   });
   if (!blob) return;
 
@@ -214,7 +234,11 @@ async function pollServerFaceTracking() {
 
     const payload = await response.json();
     if (!payload.face_detected || !payload.face_box) {
-      clearFaceOverlay();
+      missedTrackingFrames += 1;
+      if (missedTrackingFrames > 3) {
+        resetTrackingVisualState();
+        clearFaceOverlay();
+      }
       return;
     }
 
@@ -238,10 +262,11 @@ function startServerFaceTracking() {
   stopFaceTracking();
   faceTrackingActive = true;
   faceTrackingMode = "server";
+  resetTrackingVisualState();
   void pollServerFaceTracking();
   serverFaceTrackingTimer = setInterval(() => {
     void pollServerFaceTracking();
-  }, 350);
+  }, 220);
 }
 
 function startFaceTracking() {
