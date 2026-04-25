@@ -108,6 +108,45 @@ body {
   color: var(--ink);
 }
 
+#filterSelect {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: #ffffff;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+}
+
+.filter-controls {
+  margin-top: 8px;
+}
+
+.filter-size-row {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.filter-size-row label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+#filterSize {
+  width: 100%;
+}
+
+#filterSizeValue {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: rgba(26, 27, 29, 0.75);
+  min-width: 42px;
+  text-align: right;
+}
+
 #refreshCamerasBtn {
   border-radius: 10px;
   padding: 10px 12px;
