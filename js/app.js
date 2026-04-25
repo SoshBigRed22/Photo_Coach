@@ -35,6 +35,12 @@ const autoCaptureBtn = document.getElementById("autoCaptureBtn");
 const captureBtn = document.getElementById("captureBtn");
 const analyzeBtn = document.getElementById("analyzeBtn");
 const uploadInput = document.getElementById("uploadInput");
+const inspirationUrlInput = document.getElementById("inspirationUrlInput");
+const inspirationNoteInput = document.getElementById("inspirationNoteInput");
+const addInspirationBtn = document.getElementById("addInspirationBtn");
+const clearInspirationBtn = document.getElementById("clearInspirationBtn");
+const inspirationStatus = document.getElementById("inspirationStatus");
+const inspirationList = document.getElementById("inspirationList");
 const cameraFeed = document.getElementById("cameraFeed");
 const faceOverlay = document.getElementById("faceOverlay");
 const captureCanvas = document.getElementById("captureCanvas");
@@ -52,6 +58,7 @@ const faceDetector = supportsFaceDetector
   ? new FaceDetector({ maxDetectedFaces: 1, fastMode: true })
   : null;
 const serverTrackingCanvas = document.createElement("canvas");
+const INSPIRATION_STORAGE_KEY = "photoCoachPinterestInspirationV1";
 
 // MediaPipe Face Mesh for landmark detection
 let faceMesh = null;
@@ -73,6 +80,7 @@ let renderedTrackedBox = null;
 let missedTrackingFrames = 0;
 let selectedFilter = "none";
 let selectedFilterScale = 1.0;
+let inspirationEntries = [];
 let selectedPhotoContext = buildPhotoContext("empty");
 
 const FILTER_LABELS = {
@@ -115,6 +123,14 @@ const PIERCING_STYLE_GUIDE = {
     alternatives: ["earring-left", "nose-stud-left"],
     note: "Hoops usually flatter balanced or longer silhouettes because they widen the outer frame nicely.",
   },
+};
+
+const PINTEREST_TAG_MAP = {
+  septum: ["septum", "bull", "horseshoe"],
+  "nose-stud-left": ["nose stud", "nostril", "nostril stud", "nose pin", "tiny stud", "minimalist"],
+  "brow-left": ["brow", "eyebrow", "brow ring", "eyebrow ring"],
+  "earring-left": ["earring", "hoop", "huggie", "lobe", "cartilage"],
+  "earring-right": ["earring", "hoop", "huggie", "lobe", "cartilage"],
 };
 
 function setCameraStatus(message) {
@@ -900,6 +916,7 @@ function filterLabel(filterKey) {
 function buildPhotoContext(source) {
   const activeBox = renderedTrackedBox || targetTrackedBox;
   const overlayWidth = faceOverlay?.width || faceOverlay?.clientWidth || 0;
+  const inspiration = inferInspirationPreference(inspirationEntries);
 
   return {
     source,
@@ -908,7 +925,181 @@ function buildPhotoContext(source) {
     faceShape: detectedLandmarks ? detectedFaceShape : null,
     faceDetected: Boolean(detectedLandmarks || activeBox),
     faceWidthRatio: activeBox && overlayWidth ? activeBox.width / overlayWidth : null,
+    inspiration,
   };
+}
+
+function normalizePinterestUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl.trim());
+    const hostname = url.hostname.replace(/^www\./i, "").toLowerCase();
+    if (!hostname.includes("pinterest.")) return null;
+    return `${url.origin}${url.pathname}`.replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function parseStyleTokens(text) {
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  const tokens = new Set();
+
+  for (const [filterKey, keywords] of Object.entries(PINTEREST_TAG_MAP)) {
+    if (keywords.some((keyword) => lower.includes(keyword))) {
+      tokens.add(filterKey);
+    }
+  }
+
+  return [...tokens];
+}
+
+function addInspirationEntry(rawUrl, note = "") {
+  const normalizedUrl = normalizePinterestUrl(rawUrl);
+  if (!normalizedUrl) {
+    throw new Error("Please paste a valid Pinterest link.");
+  }
+
+  if (inspirationEntries.some((entry) => entry.url === normalizedUrl)) {
+    throw new Error("That Pinterest link is already in your inspiration list.");
+  }
+
+  const combined = `${normalizedUrl} ${note}`;
+  const entry = {
+    id: `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    url: normalizedUrl,
+    note: note.trim(),
+    styleTokens: parseStyleTokens(combined),
+    addedAt: Date.now(),
+  };
+
+  inspirationEntries.unshift(entry);
+  inspirationEntries = inspirationEntries.slice(0, 12);
+  persistInspirationEntries();
+  renderInspirationEntries();
+  selectedPhotoContext = buildPhotoContext(selectedPhotoContext.source || "empty");
+}
+
+function removeInspirationEntry(id) {
+  inspirationEntries = inspirationEntries.filter((entry) => entry.id !== id);
+  persistInspirationEntries();
+  renderInspirationEntries();
+  selectedPhotoContext = buildPhotoContext(selectedPhotoContext.source || "empty");
+}
+
+function clearInspirationEntries() {
+  inspirationEntries = [];
+  persistInspirationEntries();
+  renderInspirationEntries();
+  selectedPhotoContext = buildPhotoContext(selectedPhotoContext.source || "empty");
+}
+
+function persistInspirationEntries() {
+  try {
+    localStorage.setItem(INSPIRATION_STORAGE_KEY, JSON.stringify(inspirationEntries));
+  } catch {
+    // Ignore persistence failures for private mode or restricted storage.
+  }
+}
+
+function loadInspirationEntries() {
+  try {
+    const raw = localStorage.getItem(INSPIRATION_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+
+    inspirationEntries = parsed
+      .filter((entry) => entry && typeof entry.url === "string")
+      .map((entry) => ({
+        id: String(entry.id || `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        url: normalizePinterestUrl(entry.url) || entry.url,
+        note: typeof entry.note === "string" ? entry.note : "",
+        styleTokens: Array.isArray(entry.styleTokens) ? entry.styleTokens : parseStyleTokens(`${entry.url} ${entry.note || ""}`),
+        addedAt: Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now(),
+      }))
+      .filter((entry) => entry.url && entry.url.includes("pinterest"))
+      .slice(0, 12);
+  } catch {
+    inspirationEntries = [];
+  }
+}
+
+function inferInspirationPreference(entries) {
+  if (!entries.length) {
+    return {
+      dominantFilter: null,
+      confidence: 0,
+      totalPins: 0,
+    };
+  }
+
+  const scores = {
+    septum: 0,
+    "nose-stud-left": 0,
+    "brow-left": 0,
+    "earring-left": 0,
+    "earring-right": 0,
+  };
+
+  for (const entry of entries) {
+    const tokens = Array.isArray(entry.styleTokens) ? entry.styleTokens : [];
+    for (const token of tokens) {
+      if (scores[token] !== undefined) {
+        scores[token] += 1;
+      }
+    }
+  }
+
+  const dominant = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  const dominantFilter = dominant && dominant[1] > 0 ? dominant[0] : null;
+  const confidence = dominantFilter ? dominant[1] / Math.max(1, entries.length) : 0;
+
+  return {
+    dominantFilter,
+    confidence,
+    totalPins: entries.length,
+  };
+}
+
+function renderInspirationEntries() {
+  if (!inspirationList || !inspirationStatus) return;
+
+  inspirationList.innerHTML = "";
+
+  if (!inspirationEntries.length) {
+    inspirationStatus.textContent = "No inspiration pins added yet.";
+    return;
+  }
+
+  const preference = inferInspirationPreference(inspirationEntries);
+  if (preference.dominantFilter) {
+    inspirationStatus.textContent = `Loaded ${preference.totalPins} pin(s). Current vibe leans toward ${filterLabel(preference.dominantFilter)}.`;
+  } else {
+    inspirationStatus.textContent = `Loaded ${preference.totalPins} pin(s). Add notes like \"septum\" or \"hoop\" for sharper matching.`;
+  }
+
+  for (const entry of inspirationEntries) {
+    const li = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = entry.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = entry.note || entry.url;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.className = "inspiration-remove-btn";
+    removeBtn.addEventListener("click", () => {
+      removeInspirationEntry(entry.id);
+    });
+
+    li.appendChild(link);
+    li.appendChild(document.createTextNode(" "));
+    li.appendChild(removeBtn);
+    inspirationList.appendChild(li);
+  }
 }
 
 function renderPiercingFitAssessment(assessment) {
@@ -999,6 +1190,19 @@ function assessPiercingFit(context) {
     }
   }
 
+  if (context.inspiration && context.inspiration.dominantFilter) {
+    if (context.inspiration.dominantFilter === context.filter) {
+      score += 7;
+      details.push(`Your saved inspiration leans toward ${filterLabel(context.filter)}, so this pick matches your personal style direction.`);
+    } else {
+      score -= 4;
+      details.push(`Your saved inspiration leans toward ${filterLabel(context.inspiration.dominantFilter)}, which differs from this selection.`);
+      if (context.inspiration.confidence >= 0.45) {
+        details.push(`Style-forward alternative: ${filterLabel(context.inspiration.dominantFilter)}.`);
+      }
+    }
+  }
+
   details.push(guide.note);
   score = Math.max(40, Math.min(96, Math.round(score)));
 
@@ -1011,6 +1215,10 @@ function assessPiercingFit(context) {
 
   if (recommendedFilter !== context.filter) {
     details.push(`Recommended instead: ${filterLabel(recommendedFilter)}.`);
+  }
+
+  if (context.inspiration && context.inspiration.dominantFilter && context.inspiration.confidence >= 0.45 && score < 84) {
+    details.push(`Inspiration-first option: ${filterLabel(context.inspiration.dominantFilter)}.`);
   }
 
   return {
@@ -1394,12 +1602,38 @@ cameraSelect.addEventListener("change", () => {
 if (filterSelect) {
   filterSelect.addEventListener("change", () => {
     applyFilterControlState();
+    selectedPhotoContext = buildPhotoContext(selectedPhotoContext.source || "empty");
   });
 }
 
 if (filterSize) {
   filterSize.addEventListener("input", () => {
     applyFilterControlState();
+    selectedPhotoContext = buildPhotoContext(selectedPhotoContext.source || "empty");
+  });
+}
+
+if (addInspirationBtn && inspirationUrlInput) {
+  addInspirationBtn.addEventListener("click", () => {
+    try {
+      addInspirationEntry(inspirationUrlInput.value, inspirationNoteInput?.value || "");
+      inspirationUrlInput.value = "";
+      if (inspirationNoteInput) inspirationNoteInput.value = "";
+    } catch (error) {
+      alert(error.message || "Could not add inspiration link.");
+    }
+  });
+
+  inspirationUrlInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    addInspirationBtn.click();
+  });
+}
+
+if (clearInspirationBtn) {
+  clearInspirationBtn.addEventListener("click", () => {
+    clearInspirationEntries();
   });
 }
 
@@ -1467,6 +1701,8 @@ analyzeBtn.addEventListener("click", async () => {
 
 configureHostedModeUI();
 applyFilterControlState();
+loadInspirationEntries();
+renderInspirationEntries();
 populateCameraSelect().catch((error) => {
   console.error("[PhotoCoach] initial camera scan error:", error);
   setCameraStatus("Could not scan camera devices yet. Click Refresh.");
