@@ -83,8 +83,23 @@
           <button id="analyzeBtn" disabled>Analyze Photo</button>
         </div>
         <section class="inspiration-panel" aria-label="Inspiration import">
-          <h3>Inspiration (Phase 1)</h3>
-          <p class="inspiration-help">Paste Pinterest pin links to personalize recommendations. OAuth account-connect is planned for a later phase.</p>
+          <h3>Inspiration</h3>
+          <p class="inspiration-help">Connect Pinterest to browse saved boards and pins, or paste Pinterest links manually to personalize recommendations.</p>
+          <div class="pinterest-connect-row">
+            <button id="connectPinterestBtn" type="button">Connect Pinterest</button>
+            <button id="disconnectPinterestBtn" type="button" hidden>Disconnect</button>
+          </div>
+          <p id="pinterestConnectStatus" class="pinterest-connect-status">Pinterest account not connected.</p>
+          <div class="pinterest-board-row">
+            <select id="pinterestBoardSelect" aria-label="Pinterest board selector" disabled>
+              <option value="">Select a Pinterest board</option>
+            </select>
+            <button id="refreshPinterestBoardsBtn" type="button" disabled>Refresh Boards</button>
+          </div>
+          <div class="pinterest-pin-actions">
+            <button id="loadPinterestPinsBtn" type="button" disabled>Load Board Pins</button>
+          </div>
+          <ul id="pinterestPinsList" class="inspiration-list"></ul>
           <div class="inspiration-form-row">
             <input id="inspirationUrlInput" type="url" placeholder="https://www.pinterest.com/pin/..." autocomplete="off">
             <button id="addInspirationBtn" type="button">Add Pin</button>
@@ -119,6 +134,13 @@
   <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
   
+  <!-- Modules — load order matters: state first, then helpers, then entry point -->
+  <script src="js/state.js"></script>
+  <script src="js/tracking.js"></script>
+  <script src="js/filters.js"></script>
+  <script src="js/camera.js"></script>
+  <script src="js/analysis.js"></script>
+  <script src="js/pinterest.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
