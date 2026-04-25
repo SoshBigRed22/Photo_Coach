@@ -49,6 +49,12 @@ const faceDetector = supportsFaceDetector
   : null;
 const serverTrackingCanvas = document.createElement("canvas");
 
+// MediaPipe Face Mesh for landmark detection
+let faceMesh = null;
+let faceMeshInitializing = false;
+let detectedLandmarks = null;
+let detectedFaceShape = "oval";  // Default shape
+
 let activeStream = null;
 let selectedBlob = null;
 let showedHardwareHint = false;
@@ -155,11 +161,11 @@ function drawOverlayBox(box) {
   if (!ctx) return;
 
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "rgba(19, 111, 99, 0.95)";
-  ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
-  ctx.strokeRect(box.x, box.y, box.width, box.height);
-  ctx.fillRect(box.x, box.y, box.width, box.height);
+  
+  // Draw dynamic face box based on detected shape
+  drawDynamicFaceBox(ctx, box);
+  
+  // Draw filter overlays on top
   drawFilterOverlay(ctx, box);
 }
 
@@ -173,6 +179,8 @@ function drawFilterOverlay(ctx, box) {
   const cx = box.x + (box.width * 0.5);
   const cy = box.y + (box.height * 0.5);
   const scale = selectedFilterScale;
+  const displayWidth = Math.round(faceOverlay.clientWidth);
+  const displayHeight = Math.round(faceOverlay.clientHeight);
 
   ctx.save();
   ctx.lineCap = "round";
@@ -181,9 +189,19 @@ function drawFilterOverlay(ctx, box) {
   ctx.shadowBlur = 6;
 
   if (selectedFilter === "septum") {
+    let sx = cx;
+    let sy = box.y + (box.height * 0.63);
+
+    // Use landmark if available (nose tip landmark #1)
+    if (detectedLandmarks) {
+      const noseTip = getLandmarkCoordinate(detectedLandmarks, 1, box, displayWidth, displayHeight);
+      if (noseTip) {
+        sx = noseTip.x;
+        sy = noseTip.y + (box.height * 0.08);
+      }
+    }
+
     const r = Math.max(6, box.width * 0.06 * scale);
-    const sx = cx;
-    const sy = box.y + (box.height * 0.63);
     ctx.strokeStyle = ringColor;
     ctx.lineWidth = Math.max(2, box.width * 0.012 * scale);
     ctx.beginPath();
@@ -195,8 +213,18 @@ function drawFilterOverlay(ctx, box) {
     ctx.arc(sx + (r * 0.7), sy + (r * 0.2), Math.max(1.8, r * 0.14), 0, Math.PI * 2);
     ctx.fill();
   } else if (selectedFilter === "nose-stud-left") {
-    const sx = box.x + (box.width * 0.41);
-    const sy = box.y + (box.height * 0.6);
+    let sx = box.x + (box.width * 0.41);
+    let sy = box.y + (box.height * 0.6);
+
+    // Use landmark if available (nose left landmark #130)
+    if (detectedLandmarks) {
+      const noseLeft = getLandmarkCoordinate(detectedLandmarks, 130, box, displayWidth, displayHeight);
+      if (noseLeft) {
+        sx = noseLeft.x - (box.width * 0.08);
+        sy = noseLeft.y;
+      }
+    }
+
     const r = Math.max(2, box.width * 0.014 * scale);
     ctx.fillStyle = ringColor;
     ctx.strokeStyle = strokeColor;
@@ -206,8 +234,18 @@ function drawFilterOverlay(ctx, box) {
     ctx.fill();
     ctx.stroke();
   } else if (selectedFilter === "brow-left") {
-    const sx = box.x + (box.width * 0.35);
-    const sy = box.y + (box.height * 0.35);
+    let sx = box.x + (box.width * 0.35);
+    let sy = box.y + (box.height * 0.35);
+
+    // Use landmark if available (left eyebrow landmark #285)
+    if (detectedLandmarks) {
+      const eyebrow = getLandmarkCoordinate(detectedLandmarks, 285, box, displayWidth, displayHeight);
+      if (eyebrow) {
+        sx = eyebrow.x;
+        sy = eyebrow.y - (box.height * 0.05);
+      }
+    }
+
     const rx = Math.max(5, box.width * 0.032 * scale);
     const ry = Math.max(3, box.height * 0.018 * scale);
     ctx.strokeStyle = ringColor;
@@ -216,15 +254,232 @@ function drawFilterOverlay(ctx, box) {
     ctx.ellipse(sx, sy, rx, ry, -0.18, 0.1 * Math.PI, 1.1 * Math.PI);
     ctx.stroke();
   } else if (selectedFilter === "earring-left" || selectedFilter === "earring-right") {
-    const side = selectedFilter === "earring-left" ? 0.06 : 0.94;
-    const sx = box.x + (box.width * side);
-    const sy = box.y + (box.height * 0.68);
+    const isLeft = selectedFilter === "earring-left";
+    let sx = box.x + (box.width * (isLeft ? 0.06 : 0.94));
+    let sy = box.y + (box.height * 0.68);
+
+    // Use landmark if available (ear landmarks #234 for left, #454 for right)
+    if (detectedLandmarks) {
+      const earIndex = isLeft ? 234 : 454;
+      const ear = getLandmarkCoordinate(detectedLandmarks, earIndex, box, displayWidth, displayHeight);
+      if (ear) {
+        sx = ear.x + (isLeft ? -box.width * 0.05 : box.width * 0.05);
+        sy = ear.y;
+      }
+    }
+
     const r = Math.max(8, box.width * 0.055 * scale);
     ctx.strokeStyle = ringColor;
     ctx.lineWidth = Math.max(2.2, box.width * 0.012 * scale);
     ctx.beginPath();
     ctx.arc(sx, sy, r, 0.08 * Math.PI, 1.92 * Math.PI);
     ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Facial Landmark Detection & Face Shape Classification
+// ---------------------------------------------------------------------------
+
+async function initializeFaceMesh() {
+  if (faceMesh || faceMeshInitializing) return;
+  if (typeof window.FaceMesh === "undefined") {
+    console.warn("[PhotoCoach] MediaPipe FaceMesh not available yet. Skipping landmark detection.");
+    return;
+  }
+
+  faceMeshInitializing = true;
+  try {
+    faceMesh = new window.FaceMesh({
+      locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+      }
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    faceMesh.onResults(onFaceMeshResults);
+    console.log("[PhotoCoach] MediaPipe FaceMesh initialized successfully.");
+  } catch (e) {
+    console.warn("[PhotoCoach] Failed to initialize FaceMesh:", e);
+    faceMesh = null;
+  } finally {
+    faceMeshInitializing = false;
+  }
+}
+
+function onFaceMeshResults(results) {
+  if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+    detectedLandmarks = null;
+    return;
+  }
+
+  const landmarks = results.multiFaceLandmarks[0];
+  detectedLandmarks = landmarks.map(l => ({ x: l.x, y: l.y, z: l.z }));
+  
+  // Classify face shape from landmarks
+  detectedFaceShape = classifyFaceShape(detectedLandmarks);
+}
+
+function classifyFaceShape(landmarks) {
+  if (!landmarks || landmarks.length < 300) return "oval";
+
+  // Key landmark indices for face shape classification
+  const jawlineLeft = landmarks[234];      // Left jaw corner
+  const jawlineRight = landmarks[454];     // Right jaw corner
+  const foreheadTop = landmarks[10];       // Top of forehead
+  const chin = landmarks[152];             // Chin tip
+  const cheekLeft = landmarks[205];        // Left cheekbone
+  const cheekRight = landmarks[425];       // Right cheekbone
+
+  if (!jawlineLeft || !jawlineRight || !foreheadTop || !chin || !cheekLeft || !cheekRight) {
+    return "oval";
+  }
+
+  // Calculate proportions
+  const faceWidth = Math.abs(jawlineRight.x - jawlineLeft.x);
+  const faceHeight = Math.abs(chin.y - foreheadTop.y);
+  const cheekWidth = Math.abs(cheekRight.x - cheekLeft.x);
+  
+  const heightToWidthRatio = faceHeight / faceWidth;
+  const cheekToJawRatio = cheekWidth / faceWidth;
+
+  // Classification logic based on proportions
+  if (heightToWidthRatio > 1.3) {
+    // Long face
+    if (cheekToJawRatio > 0.75) return "round";  // Soft, rounded
+    return "heart";  // Longer with defined cheeks
+  } else if (heightToWidthRatio > 1.1) {
+    // Moderate height
+    if (cheekToJawRatio > 0.85) return "round";
+    if (cheekToJawRatio > 0.75) return "oval";
+    return "square";
+  } else if (heightToWidthRatio > 0.95) {
+    // Balanced
+    if (cheekToJawRatio > 0.8) return "round";
+    return "oval";
+  } else {
+    // Wide face
+    if (cheekToJawRatio > 0.9) return "round";
+    if (Math.abs(jawlineLeft.y - jawlineRight.y) < faceHeight * 0.1) return "square";
+    return "diamond";
+  }
+}
+
+function getLandmarkCoordinate(landmarks, index, box, displayWidth, displayHeight) {
+  if (!landmarks || index >= landmarks.length) return null;
+  const landmark = landmarks[index];
+  
+  // Scale landmark from [0, 1] to display coordinates
+  let x = landmark.x * displayWidth;
+  let y = landmark.y * displayHeight;
+  
+  // Account for video mirroring (horizontal flip)
+  x = displayWidth - x;
+  
+  return { x, y, z: landmark.z };
+}
+
+function drawDynamicFaceBox(ctx, box) {
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(19, 111, 99, 0.95)";
+  ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
+
+  const centerX = box.x + box.width * 0.5;
+  const centerY = box.y + box.height * 0.5;
+  const w = box.width * 0.5;
+  const h = box.height * 0.5;
+
+  // Draw different shapes based on detected face shape
+  switch (detectedFaceShape) {
+    case "round":
+      // Circular shape
+      ctx.beginPath();
+      ctx.ellipse(centerX, centerY, w, h, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fill();
+      break;
+
+    case "oval":
+      // Oval shape (slightly taller than wide)
+      ctx.beginPath();
+      ctx.ellipse(centerX, centerY, w * 0.9, h, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fill();
+      break;
+
+    case "square":
+      // Square/rectangular shape with rounded corners
+      ctx.beginPath();
+      const radius = 12;
+      ctx.moveTo(box.x + radius, box.y);
+      ctx.lineTo(box.x + box.width - radius, box.y);
+      ctx.quadraticCurveTo(box.x + box.width, box.y, box.x + box.width, box.y + radius);
+      ctx.lineTo(box.x + box.width, box.y + box.height - radius);
+      ctx.quadraticCurveTo(box.x + box.width, box.y + box.height, box.x + box.width - radius, box.y + box.height);
+      ctx.lineTo(box.x + radius, box.y + box.height);
+      ctx.quadraticCurveTo(box.x, box.y + box.height, box.x, box.y + box.height - radius);
+      ctx.lineTo(box.x, box.y + radius);
+      ctx.quadraticCurveTo(box.x, box.y, box.x + radius, box.y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+      break;
+
+    case "heart":
+      // Heart shape (wider at top)
+      ctx.beginPath();
+      const heartCp = box.height * 0.35;
+      ctx.moveTo(centerX, box.y + heartCp);
+      ctx.bezierCurveTo(
+        box.x, box.y,
+        box.x, box.y + heartCp,
+        centerX, box.y + heartCp + 15
+      );
+      ctx.bezierCurveTo(
+        box.x + box.width, box.y + heartCp,
+        box.x + box.width, box.y,
+        centerX, box.y + heartCp
+      );
+      ctx.bezierCurveTo(
+        centerX - 8, box.y + heartCp + 20,
+        box.x, box.y + box.height - 20,
+        centerX, box.y + box.height
+      );
+      ctx.bezierCurveTo(
+        box.x + box.width, box.y + box.height - 20,
+        centerX + 8, box.y + heartCp + 20,
+        centerX, box.y + heartCp
+      );
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+      break;
+
+    case "diamond":
+      // Diamond shape
+      ctx.beginPath();
+      ctx.moveTo(centerX, box.y);
+      ctx.lineTo(box.x + box.width, centerY);
+      ctx.lineTo(centerX, box.y + box.height);
+      ctx.lineTo(box.x, centerY);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+      break;
+
+    default:
+      // Fallback to rectangle
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+      ctx.fillRect(box.x, box.y, box.width, box.height);
   }
 
   ctx.restore();
@@ -292,6 +547,15 @@ async function runFaceTrackingLoop() {
   }
 
   try {
+    // Process frame through MediaPipe Face Mesh for landmarks
+    if (faceMesh && !faceMeshInitializing) {
+      try {
+        await faceMesh.send({ image: cameraFeed });
+      } catch {
+        // FaceMesh processing may fail intermittently; continue anyway
+      }
+    }
+
     const faces = await faceDetector.detect(cameraFeed);
     if (!faces.length || !faces[0].boundingBox || !cameraFeed.videoWidth || !cameraFeed.videoHeight) {
       missedTrackingFrames += 1;
@@ -409,6 +673,9 @@ function startFaceTracking() {
     clearFaceOverlay();
     return;
   }
+
+  // Initialize MediaPipe Face Mesh for landmark detection
+  void initializeFaceMesh();
 
   if (supportsFaceDetector) {
     stopFaceTracking();
