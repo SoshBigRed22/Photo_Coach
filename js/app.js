@@ -24,6 +24,9 @@ const startCameraBtn = document.getElementById("startCameraBtn");
 const refreshCamerasBtn = document.getElementById("refreshCamerasBtn");
 const cameraSelect = document.getElementById("cameraSelect");
 const cameraStatus = document.getElementById("cameraStatus");
+const filterSelect = document.getElementById("filterSelect");
+const filterSize = document.getElementById("filterSize");
+const filterSizeValue = document.getElementById("filterSizeValue");
 const systemCaptureBtn = document.getElementById("systemCaptureBtn");
 const systemCameraIndex = document.getElementById("systemCameraIndex");
 const testSystemIndexBtn = document.getElementById("testSystemIndexBtn");
@@ -58,6 +61,8 @@ let overlayRenderRafId = null;
 let targetTrackedBox = null;
 let renderedTrackedBox = null;
 let missedTrackingFrames = 0;
+let selectedFilter = "none";
+let selectedFilterScale = 1.0;
 
 function setCameraStatus(message) {
   cameraStatus.textContent = message;
@@ -155,6 +160,74 @@ function drawOverlayBox(box) {
   ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
   ctx.strokeRect(box.x, box.y, box.width, box.height);
   ctx.fillRect(box.x, box.y, box.width, box.height);
+  drawFilterOverlay(ctx, box);
+}
+
+function drawFilterOverlay(ctx, box) {
+  if (selectedFilter === "none") return;
+
+  const ringColor = "#cfd6df";
+  const strokeColor = "#9099a4";
+  const shadowColor = "rgba(0, 0, 0, 0.18)";
+
+  const cx = box.x + (box.width * 0.5);
+  const cy = box.y + (box.height * 0.5);
+  const scale = selectedFilterScale;
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.shadowColor = shadowColor;
+  ctx.shadowBlur = 6;
+
+  if (selectedFilter === "septum") {
+    const r = Math.max(6, box.width * 0.06 * scale);
+    const sx = cx;
+    const sy = box.y + (box.height * 0.63);
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = Math.max(2, box.width * 0.012 * scale);
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0.15 * Math.PI, 0.85 * Math.PI, false);
+    ctx.stroke();
+    ctx.fillStyle = ringColor;
+    ctx.beginPath();
+    ctx.arc(sx - (r * 0.7), sy + (r * 0.2), Math.max(1.8, r * 0.14), 0, Math.PI * 2);
+    ctx.arc(sx + (r * 0.7), sy + (r * 0.2), Math.max(1.8, r * 0.14), 0, Math.PI * 2);
+    ctx.fill();
+  } else if (selectedFilter === "nose-stud-left") {
+    const sx = box.x + (box.width * 0.41);
+    const sy = box.y + (box.height * 0.6);
+    const r = Math.max(2, box.width * 0.014 * scale);
+    ctx.fillStyle = ringColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (selectedFilter === "brow-left") {
+    const sx = box.x + (box.width * 0.35);
+    const sy = box.y + (box.height * 0.35);
+    const rx = Math.max(5, box.width * 0.032 * scale);
+    const ry = Math.max(3, box.height * 0.018 * scale);
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = Math.max(2, box.width * 0.01 * scale);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, rx, ry, -0.18, 0.1 * Math.PI, 1.1 * Math.PI);
+    ctx.stroke();
+  } else if (selectedFilter === "earring-left" || selectedFilter === "earring-right") {
+    const side = selectedFilter === "earring-left" ? 0.06 : 0.94;
+    const sx = box.x + (box.width * side);
+    const sy = box.y + (box.height * 0.68);
+    const r = Math.max(8, box.width * 0.055 * scale);
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = Math.max(2.2, box.width * 0.012 * scale);
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0.08 * Math.PI, 1.92 * Math.PI);
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 function runOverlayRenderLoop() {
@@ -379,6 +452,14 @@ function configureHostedModeUI() {
     testSystemIndexBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
     autoProbeBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
     autoCaptureBtn.title = "Unavailable on hosted frontend. Use browser camera instead.";
+  }
+}
+
+function applyFilterControlState() {
+  selectedFilter = filterSelect ? filterSelect.value : "none";
+  selectedFilterScale = filterSize ? Number.parseInt(filterSize.value, 10) / 100 : 1.0;
+  if (filterSizeValue) {
+    filterSizeValue.textContent = `${Math.round(selectedFilterScale * 100)}%`;
   }
 }
 
@@ -858,6 +939,18 @@ cameraSelect.addEventListener("change", () => {
   }
 });
 
+if (filterSelect) {
+  filterSelect.addEventListener("change", () => {
+    applyFilterControlState();
+  });
+}
+
+if (filterSize) {
+  filterSize.addEventListener("input", () => {
+    applyFilterControlState();
+  });
+}
+
 captureBtn.addEventListener("click", async () => {
   if (!cameraFeed.videoWidth || !cameraFeed.videoHeight) return;
 
@@ -898,6 +991,7 @@ analyzeBtn.addEventListener("click", async () => {
 });
 
 configureHostedModeUI();
+applyFilterControlState();
 populateCameraSelect().catch((error) => {
   console.error("[PhotoCoach] initial camera scan error:", error);
   setCameraStatus("Could not scan camera devices yet. Click Refresh.");
