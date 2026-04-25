@@ -40,6 +40,10 @@ const faceOverlay = document.getElementById("faceOverlay");
 const captureCanvas = document.getElementById("captureCanvas");
 const previewImage = document.getElementById("previewImage");
 const scorePill = document.getElementById("scorePill");
+const piercingFitPanel = document.getElementById("piercingFitPanel");
+const piercingFitScore = document.getElementById("piercingFitScore");
+const piercingFitSummary = document.getElementById("piercingFitSummary");
+const piercingFitList = document.getElementById("piercingFitList");
 const tipsList = document.getElementById("tipsList");
 const metricsGrid = document.getElementById("metricsGrid");
 
@@ -69,6 +73,49 @@ let renderedTrackedBox = null;
 let missedTrackingFrames = 0;
 let selectedFilter = "none";
 let selectedFilterScale = 1.0;
+let selectedPhotoContext = buildPhotoContext("empty");
+
+const FILTER_LABELS = {
+  none: "None",
+  septum: "Septum Ring",
+  "nose-stud-left": "Nose Stud (Left)",
+  "brow-left": "Brow Ring (Left)",
+  "earring-left": "Hoop Earring (Left)",
+  "earring-right": "Hoop Earring (Right)",
+};
+
+const PIERCING_STYLE_GUIDE = {
+  septum: {
+    preferredShapes: ["oval", "diamond", "round"],
+    flexibleShapes: ["heart"],
+    alternatives: ["nose-stud-left", "brow-left"],
+    note: "Septum rings usually read best when the face has soft center balance or strong cheekbone symmetry.",
+  },
+  "nose-stud-left": {
+    preferredShapes: ["heart", "oval", "square"],
+    flexibleShapes: ["diamond"],
+    alternatives: ["brow-left", "septum"],
+    note: "Nose studs are the safest everyday option and usually work well when you want a lighter accent.",
+  },
+  "brow-left": {
+    preferredShapes: ["square", "diamond", "oval"],
+    flexibleShapes: ["heart"],
+    alternatives: ["nose-stud-left", "earring-left"],
+    note: "Brow rings suit faces that can carry a stronger upper-face detail without overpowering the center.",
+  },
+  "earring-left": {
+    preferredShapes: ["oval", "heart", "round"],
+    flexibleShapes: ["square", "diamond"],
+    alternatives: ["earring-right", "nose-stud-left"],
+    note: "Hoops usually flatter balanced or longer silhouettes because they widen the outer frame nicely.",
+  },
+  "earring-right": {
+    preferredShapes: ["oval", "heart", "round"],
+    flexibleShapes: ["square", "diamond"],
+    alternatives: ["earring-left", "nose-stud-left"],
+    note: "Hoops usually flatter balanced or longer silhouettes because they widen the outer frame nicely.",
+  },
+};
 
 function setCameraStatus(message) {
   cameraStatus.textContent = message;
@@ -846,6 +893,143 @@ function scoreClass(score) {
   return "low";
 }
 
+function filterLabel(filterKey) {
+  return FILTER_LABELS[filterKey] || "Selected Piercing";
+}
+
+function buildPhotoContext(source) {
+  const activeBox = renderedTrackedBox || targetTrackedBox;
+  const overlayWidth = faceOverlay?.width || faceOverlay?.clientWidth || 0;
+
+  return {
+    source,
+    filter: selectedFilter,
+    filterScale: selectedFilterScale,
+    faceShape: detectedLandmarks ? detectedFaceShape : null,
+    faceDetected: Boolean(detectedLandmarks || activeBox),
+    faceWidthRatio: activeBox && overlayWidth ? activeBox.width / overlayWidth : null,
+  };
+}
+
+function renderPiercingFitAssessment(assessment) {
+  if (!piercingFitPanel || !piercingFitScore || !piercingFitSummary || !piercingFitList) return;
+
+  if (!assessment) {
+    piercingFitPanel.hidden = true;
+    piercingFitList.innerHTML = "";
+    return;
+  }
+
+  piercingFitPanel.hidden = false;
+  piercingFitScore.textContent = `Piercing Fit: ${assessment.score}/100`;
+
+  const fitClass = scoreClass(assessment.score);
+  piercingFitScore.style.background = fitClass === "good"
+    ? "rgba(19, 111, 99, 0.14)"
+    : fitClass === "mid"
+      ? "rgba(207, 106, 50, 0.18)"
+      : "rgba(154, 31, 31, 0.16)";
+  piercingFitScore.style.color = fitClass === "low" ? "var(--danger)" : "var(--accent-strong)";
+
+  piercingFitSummary.textContent = assessment.summary;
+  piercingFitList.innerHTML = "";
+  for (const item of assessment.details) {
+    const li = document.createElement("li");
+    li.textContent = item;
+    piercingFitList.appendChild(li);
+  }
+}
+
+function assessPiercingFit(context) {
+  if (!context || !context.filter || context.filter === "none") {
+    return null;
+  }
+
+  const guide = PIERCING_STYLE_GUIDE[context.filter];
+  const label = filterLabel(context.filter);
+  const details = [];
+  let score = 72;
+
+  if (!context.faceDetected) {
+    return {
+      score: 58,
+      summary: `${label} was kept in the captured image, but I could not read enough face geometry to judge the fit confidently.`,
+      details: [
+        "Try capturing with your full face centered and well lit for a stronger fit reading.",
+        `If you want a safer default instead, start with ${filterLabel("nose-stud-left")}.`,
+      ],
+    };
+  }
+
+  if (context.faceShape) {
+    if (guide.preferredShapes.includes(context.faceShape)) {
+      score += 16;
+      details.push(`${label} suits ${context.faceShape} faces well, so the shape match is strong.`);
+    } else if (guide.flexibleShapes.includes(context.faceShape)) {
+      score += 6;
+      details.push(`${label} can work on a ${context.faceShape} face, but placement and size matter more.`);
+    } else {
+      score -= 12;
+      const alt = guide.alternatives[0] || "nose-stud-left";
+      details.push(`${label} is a weaker match for a ${context.faceShape} face shape.`);
+      details.push(`A better starting point would be ${filterLabel(alt)}.`);
+    }
+  } else {
+    details.push("Face shape was not locked at capture time, so this fit score is based on the live overlay only.");
+  }
+
+  if (context.filterScale > 1.22) {
+    score -= 8;
+    details.push("The selected size reads a little large, so the piercing pulls focus more than it should.");
+  } else if (context.filterScale < 0.82) {
+    score -= 5;
+    details.push("The selected size is slightly understated, which can make the piercing disappear in the frame.");
+  } else {
+    score += 5;
+    details.push("The current size is close to a natural fit for the tracked face width.");
+  }
+
+  if (context.faceWidthRatio !== null) {
+    if (context.filter.startsWith("earring") && context.faceWidthRatio < 0.26) {
+      score -= 6;
+      details.push("The face reads narrow in frame, so the hoop can feel oversized unless scaled down a bit.");
+    } else if (context.filter === "septum" && context.faceWidthRatio > 0.34) {
+      score += 4;
+      details.push("The stronger face presence in frame helps the septum ring hold visual balance.");
+    }
+  }
+
+  details.push(guide.note);
+  score = Math.max(40, Math.min(96, Math.round(score)));
+
+  const recommendedFilter = (score >= 70 ? context.filter : guide.alternatives[0]) || context.filter;
+  const summary = score >= 82
+    ? `${label} looks like a strong match for this face and frame.`
+    : score >= 68
+      ? `${label} works reasonably well, but a small sizing or style change could improve it.`
+      : `${label} is probably not the best match here.`;
+
+  if (recommendedFilter !== context.filter) {
+    details.push(`Recommended instead: ${filterLabel(recommendedFilter)}.`);
+  }
+
+  return {
+    score,
+    summary,
+    details,
+  };
+}
+
+function drawVideoCoverFrame(ctx, source, sourceWidth, sourceHeight, destWidth, destHeight) {
+  const scale = Math.max(destWidth / sourceWidth, destHeight / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  const offsetX = (destWidth - drawWidth) / 2;
+  const offsetY = (destHeight - drawHeight) / 2;
+
+  ctx.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
+}
+
 function setScore(score) {
   scorePill.textContent = `Score: ${score}/100`;
   const cls = scoreClass(score);
@@ -892,10 +1076,11 @@ function renderMetrics(metrics) {
   }
 }
 
-function applyAnalysisPayload(payload) {
+function applyAnalysisPayload(payload, localAssessment = null) {
   setScore(payload.score);
   renderTips(payload.tips || []);
   renderMetrics(payload.metrics || {});
+  renderPiercingFitAssessment(localAssessment);
 }
 
 function getSelectedSystemIndex() {
@@ -904,7 +1089,7 @@ function getSelectedSystemIndex() {
   return idx;
 }
 
-async function analyzeBlob(blob) {
+async function analyzeBlob(blob, context = selectedPhotoContext) {
   const formData = new FormData();
   formData.append("photo", blob, "photo.jpg");
 
@@ -922,7 +1107,7 @@ async function analyzeBlob(blob) {
       throw new Error(payload.error || "Analyze request failed.");
     }
 
-    applyAnalysisPayload(payload);
+    applyAnalysisPayload(payload, assessPiercingFit(context));
   } catch (error) {
     alert(error.message);
   } finally {
@@ -1221,18 +1406,39 @@ if (filterSize) {
 captureBtn.addEventListener("click", async () => {
   if (!cameraFeed.videoWidth || !cameraFeed.videoHeight) return;
 
-  captureCanvas.width = cameraFeed.videoWidth;
-  captureCanvas.height = cameraFeed.videoHeight;
+  const displayWidth = Math.round(cameraFeed.clientWidth || faceOverlay?.clientWidth || cameraFeed.videoWidth);
+  const displayHeight = Math.round(cameraFeed.clientHeight || faceOverlay?.clientHeight || cameraFeed.videoHeight);
+
+  captureCanvas.width = displayWidth;
+  captureCanvas.height = displayHeight;
   const ctx = captureCanvas.getContext("2d");
+  if (!ctx) return;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Flip camera horizontally (mirror image)
+  ctx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+
+  // Match the mirrored, cover-fitted live preview so the saved image keeps the visible overlay alignment.
+  ctx.save();
   ctx.scale(-1, 1);
-  ctx.drawImage(cameraFeed, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
+  ctx.translate(-captureCanvas.width, 0);
+  drawVideoCoverFrame(
+    ctx,
+    cameraFeed,
+    cameraFeed.videoWidth,
+    cameraFeed.videoHeight,
+    captureCanvas.width,
+    captureCanvas.height
+  );
+  ctx.restore();
+
+  if (faceOverlay && faceOverlay.width > 0 && faceOverlay.height > 0) {
+    ctx.drawImage(faceOverlay, 0, 0, captureCanvas.width, captureCanvas.height);
+  }
 
   const blob = await new Promise((resolve) => captureCanvas.toBlob(resolve, "image/jpeg", 0.95));
   if (!blob) return;
 
+  selectedPhotoContext = buildPhotoContext("camera-capture");
   selectedBlob = blob;
   previewImage.src = URL.createObjectURL(blob);
   previewImage.style.display = "block";
@@ -1243,10 +1449,12 @@ uploadInput.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
 
+  selectedPhotoContext = buildPhotoContext("upload");
   selectedBlob = file;
   previewImage.src = URL.createObjectURL(file);
   previewImage.style.display = "block";
   analyzeBtn.disabled = false;
+  renderPiercingFitAssessment(assessPiercingFit(selectedPhotoContext));
 });
 
 analyzeBtn.addEventListener("click", async () => {
@@ -1254,7 +1462,7 @@ analyzeBtn.addEventListener("click", async () => {
     alert("Capture or upload a photo first.");
     return;
   }
-  await analyzeBlob(selectedBlob);
+  await analyzeBlob(selectedBlob, selectedPhotoContext);
 });
 
 configureHostedModeUI();
