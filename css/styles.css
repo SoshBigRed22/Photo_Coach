@@ -266,6 +266,104 @@ button:disabled {
   display: none;
 }
 
+.inspiration-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(26, 27, 29, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.inspiration-panel h3 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.inspiration-help {
+  margin: 8px 0 10px;
+  font-size: 0.84rem;
+  color: rgba(26, 27, 29, 0.72);
+  line-height: 1.3;
+}
+
+.inspiration-form-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#inspirationUrlInput,
+#inspirationNoteInput {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: #ffffff;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+}
+
+#inspirationNoteInput {
+  margin-bottom: 8px;
+}
+
+#addInspirationBtn,
+#clearInspirationBtn {
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+#clearInspirationBtn {
+  background: #7a3e2f;
+}
+
+#clearInspirationBtn:hover {
+  background: #5e3024;
+}
+
+.inspiration-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+#inspirationStatus {
+  font-size: 0.82rem;
+  color: rgba(26, 27, 29, 0.72);
+}
+
+.inspiration-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  line-height: 1.35;
+  font-size: 0.88rem;
+}
+
+.inspiration-list li {
+  margin-bottom: 6px;
+}
+
+.inspiration-list a {
+  color: var(--accent-strong);
+}
+
+.inspiration-remove-btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 0.76rem;
+  background: rgba(26, 27, 29, 0.15);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.inspiration-remove-btn:hover {
+  background: rgba(26, 27, 29, 0.24);
+  transform: none;
+}
+
 .score-pill {
   display: inline-flex;
   align-items: center;
