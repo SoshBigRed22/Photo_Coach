@@ -54,7 +54,9 @@ let faceTrackingRafId = null;
 let faceTrackingMode = "none";
 let serverFaceTrackingTimer = null;
 let serverFaceTrackingBusy = false;
-let lastTrackedBox = null;
+let overlayRenderRafId = null;
+let targetTrackedBox = null;
+let renderedTrackedBox = null;
 let missedTrackingFrames = 0;
 
 function setCameraStatus(message) {
@@ -79,7 +81,8 @@ function clearFaceOverlay() {
 }
 
 function resetTrackingVisualState() {
-  lastTrackedBox = null;
+  targetTrackedBox = null;
+  renderedTrackedBox = null;
   missedTrackingFrames = 0;
 }
 
@@ -93,6 +96,10 @@ function stopFaceTracking() {
   if (serverFaceTrackingTimer !== null) {
     clearInterval(serverFaceTrackingTimer);
     serverFaceTrackingTimer = null;
+  }
+  if (overlayRenderRafId !== null) {
+    cancelAnimationFrame(overlayRenderRafId);
+    overlayRenderRafId = null;
   }
   serverFaceTrackingBusy = false;
   resetTrackingVisualState();
@@ -124,28 +131,71 @@ function mapBoundingBoxToDisplay(box, srcWidth, srcHeight, displayWidth, display
 }
 
 function drawFaceBox(box) {
-  if (!faceOverlay) return;
-  const ctx = faceOverlay.getContext("2d");
-  if (!ctx) return;
-
-  const drawBox = lastTrackedBox
+  const stabilized = targetTrackedBox
     ? {
-        x: (lastTrackedBox.x * 0.65) + (box.x * 0.35),
-        y: (lastTrackedBox.y * 0.65) + (box.y * 0.35),
-        width: (lastTrackedBox.width * 0.65) + (box.width * 0.35),
-        height: (lastTrackedBox.height * 0.65) + (box.height * 0.35),
+        x: (targetTrackedBox.x * 0.45) + (box.x * 0.55),
+        y: (targetTrackedBox.y * 0.45) + (box.y * 0.55),
+        width: (targetTrackedBox.width * 0.45) + (box.width * 0.55),
+        height: (targetTrackedBox.height * 0.45) + (box.height * 0.55),
       }
     : box;
 
-  lastTrackedBox = drawBox;
+  targetTrackedBox = stabilized;
   missedTrackingFrames = 0;
+}
+
+function drawOverlayBox(box) {
+  if (!faceOverlay) return;
+  const ctx = faceOverlay.getContext("2d");
+  if (!ctx) return;
 
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(19, 111, 99, 0.95)";
   ctx.fillStyle = "rgba(19, 111, 99, 0.14)";
-  ctx.strokeRect(drawBox.x, drawBox.y, drawBox.width, drawBox.height);
-  ctx.fillRect(drawBox.x, drawBox.y, drawBox.width, drawBox.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+}
+
+function runOverlayRenderLoop() {
+  if (!faceTrackingActive || !faceOverlay) {
+    overlayRenderRafId = null;
+    return;
+  }
+
+  const displayWidth = Math.round(faceOverlay.clientWidth);
+  const displayHeight = Math.round(faceOverlay.clientHeight);
+
+  if (displayWidth <= 0 || displayHeight <= 0) {
+    overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
+    return;
+  }
+
+  if (faceOverlay.width !== displayWidth || faceOverlay.height !== displayHeight) {
+    faceOverlay.width = displayWidth;
+    faceOverlay.height = displayHeight;
+  }
+
+  if (!targetTrackedBox) {
+    if (missedTrackingFrames > 3) {
+      renderedTrackedBox = null;
+      clearFaceOverlay();
+    }
+    overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
+    return;
+  }
+
+  renderedTrackedBox = renderedTrackedBox
+    ? {
+        x: (renderedTrackedBox.x * 0.72) + (targetTrackedBox.x * 0.28),
+        y: (renderedTrackedBox.y * 0.72) + (targetTrackedBox.y * 0.28),
+        width: (renderedTrackedBox.width * 0.72) + (targetTrackedBox.width * 0.28),
+        height: (renderedTrackedBox.height * 0.72) + (targetTrackedBox.height * 0.28),
+      }
+    : { ...targetTrackedBox };
+
+  drawOverlayBox(renderedTrackedBox);
+  overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
 }
 
 async function runFaceTrackingLoop() {
@@ -171,7 +221,10 @@ async function runFaceTrackingLoop() {
   try {
     const faces = await faceDetector.detect(cameraFeed);
     if (!faces.length || !faces[0].boundingBox || !cameraFeed.videoWidth || !cameraFeed.videoHeight) {
-      clearFaceOverlay();
+      missedTrackingFrames += 1;
+      if (missedTrackingFrames > 3) {
+        targetTrackedBox = null;
+      }
     } else {
       const box = mapBoundingBoxToDisplay(
         faces[0].boundingBox,
@@ -185,7 +238,10 @@ async function runFaceTrackingLoop() {
     }
   } catch {
     // Some browsers intermittently throw during track state transitions.
-    clearFaceOverlay();
+    missedTrackingFrames += 1;
+    if (missedTrackingFrames > 3) {
+      targetTrackedBox = null;
+    }
   }
 
   faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
@@ -228,7 +284,10 @@ async function pollServerFaceTracking() {
       body: formData,
     });
     if (!response.ok) {
-      clearFaceOverlay();
+      missedTrackingFrames += 1;
+      if (missedTrackingFrames > 3) {
+        targetTrackedBox = null;
+      }
       return;
     }
 
@@ -236,8 +295,7 @@ async function pollServerFaceTracking() {
     if (!payload.face_detected || !payload.face_box) {
       missedTrackingFrames += 1;
       if (missedTrackingFrames > 3) {
-        resetTrackingVisualState();
-        clearFaceOverlay();
+        targetTrackedBox = null;
       }
       return;
     }
@@ -252,7 +310,10 @@ async function pollServerFaceTracking() {
     );
     drawFaceBox(mapped);
   } catch {
-    clearFaceOverlay();
+    missedTrackingFrames += 1;
+    if (missedTrackingFrames > 3) {
+      targetTrackedBox = null;
+    }
   } finally {
     serverFaceTrackingBusy = false;
   }
@@ -263,10 +324,11 @@ function startServerFaceTracking() {
   faceTrackingActive = true;
   faceTrackingMode = "server";
   resetTrackingVisualState();
+  overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
   void pollServerFaceTracking();
   serverFaceTrackingTimer = setInterval(() => {
     void pollServerFaceTracking();
-  }, 220);
+  }, 160);
 }
 
 function startFaceTracking() {
@@ -279,6 +341,8 @@ function startFaceTracking() {
     stopFaceTracking();
     faceTrackingActive = true;
     faceTrackingMode = "local";
+    resetTrackingVisualState();
+    overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
     faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
     return;
   }
