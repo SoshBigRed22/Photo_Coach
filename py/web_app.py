@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import cv2
+import numpy as np
 from flask import Flask, jsonify, render_template, request
 
 from analyzer import analyze_image
@@ -72,6 +73,79 @@ def add_cors_headers(response):
     return response
 
 CONFIG_PATH = PROJECT_ROOT / "js" / "config.json"
+
+_face_cascade: cv2.CascadeClassifier | None = None
+
+
+def get_face_cascade() -> cv2.CascadeClassifier:
+    global _face_cascade
+    if _face_cascade is not None:
+        return _face_cascade
+
+    cv2_data = getattr(cv2, "data", None)
+    if cv2_data is not None and hasattr(cv2_data, "haarcascades"):
+        cascade_path = Path(cv2_data.haarcascades) / "haarcascade_frontalface_default.xml"
+    else:
+        # Fallback for type checkers or builds where cv2.data is not exposed.
+        cascade_path = Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
+    cascade = cv2.CascadeClassifier(str(cascade_path))
+    if cascade.empty():
+        raise RuntimeError(f"Failed to load face cascade at {cascade_path}")
+    _face_cascade = cascade
+    return cascade
+
+
+def detect_primary_face_box(frame) -> tuple[dict | None, int, int]:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    frame_height, frame_width = gray.shape
+    cascade = get_face_cascade()
+
+    # Resize before detection to reduce CPU/time, then map box back to full frame.
+    scale = 1.0
+    detect_gray = gray
+    max_detect_width = 520
+    if frame_width > max_detect_width:
+        scale = max_detect_width / float(frame_width)
+        detect_gray = cv2.resize(
+            gray,
+            (max_detect_width, int(round(frame_height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    detect_gray = cv2.equalizeHist(detect_gray)
+    faces = cascade.detectMultiScale(
+        detect_gray,
+        scaleFactor=1.08,
+        minNeighbors=6,
+        minSize=(38, 38),
+    )
+
+    # If the fast pass misses, retry once on full-resolution frame.
+    if len(faces) == 0 and scale != 1.0:
+        faces = cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(48, 48),
+        )
+        scale = 1.0
+
+    if len(faces) == 0:
+        return None, frame_width, frame_height
+
+    x, y, w, h = max(faces, key=lambda box: box[2] * box[3])
+    if scale != 1.0:
+        x = int(round(x / scale))
+        y = int(round(y / scale))
+        w = int(round(w / scale))
+        h = int(round(h / scale))
+
+    return {
+        "x": int(x),
+        "y": int(y),
+        "width": int(w),
+        "height": int(h),
+    }, frame_width, frame_height
 
 
 def load_thresholds() -> dict:
@@ -181,7 +255,6 @@ def analyze_upload():
 @app.post("/api/track-face")
 def track_face_box():
     """Detect a primary face in a frame and return its bounding box."""
-    tmp_path: Path | None = None
     if "photo" not in request.files:
         return jsonify({"error": "Missing file field 'photo'."}), 400
 
@@ -189,37 +262,27 @@ def track_face_box():
     if not uploaded.filename:
         return jsonify({"error": "No file selected."}), 400
 
-    suffix = Path(uploaded.filename).suffix or ".jpg"
-
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp_path = Path(tmp.name)
-            uploaded.save(tmp_path)
+        encoded = uploaded.read()
+        if not encoded:
+            return jsonify({"error": "Empty image payload."}), 400
 
-        result = analyze_image(tmp_path)
-        box = result.primary_face_box
+        arr = np.frombuffer(encoded, dtype=np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({"error": "Unable to decode image payload."}), 400
+
+        box, frame_width, frame_height = detect_primary_face_box(frame)
         payload = {
-            "face_detected": bool(result.face_count > 0 and box is not None),
-            "frame_width": result.width,
-            "frame_height": result.height,
-            "face_box": None,
+            "face_detected": bool(box is not None),
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "face_box": box,
         }
-
-        if box is not None:
-            x, y, w, h = box
-            payload["face_box"] = {
-                "x": int(x),
-                "y": int(y),
-                "width": int(w),
-                "height": int(h),
-            }
 
         return jsonify(payload)
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": str(exc)}), 500
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
 
 
 @app.post("/api/capture-system")
