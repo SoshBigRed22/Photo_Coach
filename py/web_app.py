@@ -12,7 +12,10 @@ from urllib.parse import quote, urlencode, urlsplit
 
 import cv2
 import numpy as np
-import requests
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    requests = None
 from flask import Flask, jsonify, redirect, render_template, request
 
 from analyzer import analyze_image
@@ -175,7 +178,12 @@ def get_pinterest_settings() -> dict[str, str]:
 
 def pinterest_is_enabled() -> bool:
     settings = get_pinterest_settings()
-    return bool(settings["app_id"] and settings["app_secret"] and settings["redirect_uri"])
+    return bool(requests and settings["app_id"] and settings["app_secret"] and settings["redirect_uri"])
+
+
+def ensure_pinterest_requests_available() -> None:
+    if requests is None:
+        raise RuntimeError("Pinterest integration is unavailable because the server dependency 'requests' is not installed.")
 
 
 def prune_pinterest_state() -> None:
@@ -191,8 +199,11 @@ def pinterest_basic_auth_header(app_id: str, app_secret: str) -> str:
 
 
 def exchange_pinterest_code_for_token(code: str) -> dict[str, Any]:
+    ensure_pinterest_requests_available()
+    http = requests
+    assert http is not None
     settings = get_pinterest_settings()
-    response = requests.post(
+    response = http.post(
         PINTEREST_TOKEN_URL,
         headers={
             "Authorization": pinterest_basic_auth_header(settings["app_id"], settings["app_secret"]),
@@ -212,8 +223,11 @@ def exchange_pinterest_code_for_token(code: str) -> dict[str, Any]:
 
 
 def refresh_pinterest_access_token(refresh_token: str) -> dict[str, Any]:
+    ensure_pinterest_requests_available()
+    http = requests
+    assert http is not None
     settings = get_pinterest_settings()
-    response = requests.post(
+    response = http.post(
         PINTEREST_TOKEN_URL,
         headers={
             "Authorization": pinterest_basic_auth_header(settings["app_id"], settings["app_secret"]),
@@ -256,8 +270,11 @@ def ensure_valid_pinterest_auth(auth_handle: str) -> dict[str, Any]:
 
 
 def pinterest_api_get(auth_handle: str, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_pinterest_requests_available()
+    http = requests
+    assert http is not None
     record = ensure_valid_pinterest_auth(auth_handle)
-    response = requests.get(
+    response = http.get(
         f"{PINTEREST_API_BASE}{path}",
         headers={
             "Authorization": f"Bearer {record['access_token']}",
@@ -269,7 +286,7 @@ def pinterest_api_get(auth_handle: str, path: str, *, params: dict[str, Any] | N
 
     if response.status_code == 401 and record.get("refresh_token"):
         record = ensure_valid_pinterest_auth(auth_handle)
-        response = requests.get(
+        response = http.get(
             f"{PINTEREST_API_BASE}{path}",
             headers={
                 "Authorization": f"Bearer {record['access_token']}",
