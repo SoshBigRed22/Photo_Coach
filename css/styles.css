@@ -278,6 +278,37 @@ button:disabled {
   color: var(--accent-strong);
 }
 
+.piercing-fit-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(26, 27, 29, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.piercing-fit-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-weight: 700;
+  background: rgba(19, 111, 99, 0.14);
+  color: var(--accent-strong);
+}
+
+.piercing-fit-summary {
+  margin: 10px 0 0;
+  line-height: 1.35;
+}
+
+.piercing-fit-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  line-height: 1.35;
+}
+
 .tips-list {
   margin: 12px 0;
   padding-left: 18px;
