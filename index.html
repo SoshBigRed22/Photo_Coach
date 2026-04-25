@@ -82,6 +82,20 @@
         <div class="actions">
           <button id="analyzeBtn" disabled>Analyze Photo</button>
         </div>
+        <section class="inspiration-panel" aria-label="Inspiration import">
+          <h3>Inspiration (Phase 1)</h3>
+          <p class="inspiration-help">Paste Pinterest pin links to personalize recommendations. OAuth account-connect is planned for a later phase.</p>
+          <div class="inspiration-form-row">
+            <input id="inspirationUrlInput" type="url" placeholder="https://www.pinterest.com/pin/..." autocomplete="off">
+            <button id="addInspirationBtn" type="button">Add Pin</button>
+          </div>
+          <input id="inspirationNoteInput" type="text" placeholder="Optional note, e.g. minimalist silver stud">
+          <div class="inspiration-meta-row">
+            <span id="inspirationStatus">No inspiration pins added yet.</span>
+            <button id="clearInspirationBtn" type="button">Clear</button>
+          </div>
+          <ul id="inspirationList" class="inspiration-list"></ul>
+        </section>
       </article>
 
       <article class="card results-card">
