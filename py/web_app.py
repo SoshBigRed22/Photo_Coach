@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
@@ -803,6 +804,120 @@ def capture_system_auto():
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/fetch-pin-image")
+def fetch_pin_image():
+    """Fetch a Pinterest pin image, remove background via GrabCut, return as base64 PNG."""
+    data = request.get_json(silent=True) or {}
+    pin_url = str(data.get("url", "")).strip()
+    if not pin_url:
+        return jsonify({"error": "Missing url"}), 400
+
+    # Accept only Pinterest domains
+    try:
+        parsed = urlsplit(pin_url)
+        hostname = parsed.hostname or ""
+    except Exception:
+        hostname = ""
+    if "pinterest." not in hostname and "pinimg.com" not in hostname:
+        return jsonify({"error": "URL must be from pinterest.com or pinimg.com"}), 400
+
+    if requests is None:
+        return jsonify({"error": "Server dependency 'requests' is not installed."}), 500
+
+    hdrs = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+    try:
+        image_url = pin_url
+
+        # If it's a Pinterest pin page, extract the image URL via og:image meta
+        if "pinterest." in hostname:
+            page_resp = requests.get(pin_url, headers=hdrs, timeout=12)
+            page_resp.raise_for_status()
+            patterns = [
+                r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\' ]+)["\']',
+                r'<meta[^>]+content=["\']([^"\' ]+)["\'][^>]+property=["\']og:image',
+                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\' ]+)["\']',
+                r'"image_url"\s*:\s*"(https://i\.pinimg\.com/[^"]+)"',
+            ]
+            found_url = None
+            for pat in patterns:
+                m = re.search(pat, page_resp.text)
+                if m:
+                    found_url = m.group(1)
+                    break
+            if not found_url:
+                return jsonify({
+                    "error": "Could not extract image from that pin page. Try pasting a direct image URL instead."
+                }), 400
+            image_url = found_url
+
+        # Fetch the actual image bytes
+        img_resp = requests.get(image_url, headers=hdrs, timeout=15)
+        img_resp.raise_for_status()
+
+        # Decode with OpenCV
+        arr = np.frombuffer(img_resp.content, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify({"error": "Could not decode image data."}), 400
+
+        # Downscale to max 600px on longest side for performance
+        h, w = img.shape[:2]
+        max_dim = 600
+        if max(h, w) > max_dim:
+            scale_factor = max_dim / max(h, w)
+            img = cv2.resize(
+                img,
+                (int(w * scale_factor), int(h * scale_factor)),
+                interpolation=cv2.INTER_AREA,
+            )
+            h, w = img.shape[:2]
+
+        # GrabCut background removal — assume subject is centered
+        mask = np.zeros((h, w), np.uint8)
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
+        margin_x = max(1, int(w * 0.15))
+        margin_y = max(1, int(h * 0.15))
+        rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
+        cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+        fg_mask = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+
+        # Also remove near-white pixels (common in product-photo backgrounds)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, light = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY)
+        fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(light))
+
+        # Smooth edges
+        fg_mask = cv2.GaussianBlur(fg_mask, (3, 3), 0)
+        _, fg_mask = cv2.threshold(fg_mask, 128, 255, cv2.THRESH_BINARY)
+
+        # Assemble RGBA image
+        img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+        img_rgba[:, :, 3] = fg_mask
+
+        # Encode as PNG
+        ok, buf = cv2.imencode(".png", img_rgba)
+        if not ok:
+            return jsonify({"error": "Failed to encode result image."}), 500
+
+        b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+        return jsonify({"image": f"data:image/png;base64,{b64}", "sourceUrl": image_url})
+
+    except requests.RequestException as exc:
+        return jsonify({"error": f"Failed to fetch image: {exc}"}), 500
+    except Exception as exc:  # pragma: no cover
+        return jsonify({"error": f"Processing failed: {exc}"}), 500
 
 
 if __name__ == "__main__":
