@@ -82,6 +82,8 @@ let detectedLandmarks    = null;
 let detectedFaceShape    = "oval";  // Default shape
 let liveFeatureMetrics   = null;
 let noseAlignmentReady   = false;
+let customOverlayImage     = null;    // HTMLImageElement of the processed pin PNG
+let customOverlayPlacement = "septum"; // landmark anchor key for the custom overlay
 
 let activeStream             = null;
 let selectedBlob             = null;
@@ -108,12 +110,13 @@ let selectedPhotoContext = null;
 // Look-up tables
 // ---------------------------------------------------------------------------
 const FILTER_LABELS = {
-  none:            "None",
-  septum:          "Septum Ring",
-  "nose-stud-left": "Nose Stud (Left)",
-  "brow-left":     "Brow Ring (Left)",
-  "earring-left":  "Hoop Earring (Left)",
-  "earring-right": "Hoop Earring (Right)",
+  none:                  "None",
+  septum:                "Septum Ring",
+  "nose-stud-left":      "Nose Stud (Left)",
+  "brow-left":           "Brow Ring (Left)",
+  "earring-left":        "Hoop Earring (Left)",
+  "earring-right":       "Hoop Earring (Right)",
+  "custom-inspiration":  "Custom (from Inspiration)",
 };
 
 const PIERCING_STYLE_GUIDE = {
