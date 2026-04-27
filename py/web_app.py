@@ -357,18 +357,16 @@ def build_analysis_payload(image_path: Path) -> dict:
     score = calculate_quality_score(result, thresholds)
 
     return {
-        "score": score,
+        "score": round(float(score), 2),
         "metrics": {
             "brightness": round(result.brightness, 2),
             "contrast": round(result.contrast, 2),
             "blur_score": round(result.blur_score, 2),
-            "noise_score": round(result.noise_score, 2),
-            "width": result.width,
             "height": result.height,
-            "face_count": result.face_count,
             "face_area_ratio": round(result.primary_face_area_ratio, 4),
             "face_center_offset": round(result.primary_face_center_offset, 4),
             "face_sharpness": round(result.face_sharpness, 2),
+            "facial_hair_presence": round(result.facial_hair_presence, 2),
         },
         "tips": tips,
     }
