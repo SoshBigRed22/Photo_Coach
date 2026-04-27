@@ -67,62 +67,104 @@ function setScore(score) {
       : "rgba(154, 31, 31, 0.16)";
 }
 
+const METRIC_LABELS = {
+  brightness_score:     "Brightness quality",
+  contrast_score:       "Contrast quality",
+  blur_quality_score:   "Blur quality",
+  face_area_score:      "Face area quality",
+  face_centering_score: "Face centering quality",
+  face_sharpness_score: "Face sharpness quality",
+  facial_hair_presence: "Facial hair presence",
+  eyebrow_symmetry_score: "Eyebrow symmetry",
+  eyebrow_size_score:   "Eyebrow size balance",
+  eye_symmetry_score:   "Eye symmetry",
+  eye_size_score:       "Eye size balance",
+  nose_symmetry_score:  "Nose symmetry",
+  nose_size_score:      "Nose size balance",
+  mouth_symmetry_score: "Mouth symmetry",
+  mouth_size_score:     "Mouth size balance",
+  chin_symmetry_score:  "Chin symmetry",
+  chin_size_score:      "Chin size balance",
+};
+
+const PERCENT_METRIC_KEYS = new Set([
+  "brightness_score",
+  "contrast_score",
+  "blur_quality_score",
+  "face_area_score",
+  "face_centering_score",
+  "face_sharpness_score",
+  "eyebrow_symmetry_score",
+  "eyebrow_size_score",
+  "eye_symmetry_score",
+  "eye_size_score",
+  "nose_symmetry_score",
+  "nose_size_score",
+  "mouth_symmetry_score",
+  "mouth_size_score",
+  "chin_symmetry_score",
+  "chin_size_score",
+  "facial_hair_presence",
+]);
+
+const METRIC_ACTION_TIPS = {
+  brightness_score: "Use brighter front-facing light so your face reads clearly.",
+  contrast_score: "Increase separation from the background to improve contrast.",
+  blur_quality_score: "Hold still and tap to focus before capture to reduce blur.",
+  face_area_score: "Move slightly closer so your face fills more of the frame.",
+  face_centering_score: "Align the nose tracker with the center target before capture.",
+  face_sharpness_score: "Keep your face in focus and avoid motion right before capture.",
+  eyebrow_symmetry_score: "Keep your head level and face the camera straight-on for better eyebrow symmetry.",
+  eyebrow_size_score: "Keep equal distance from the camera on both sides to stabilize eyebrow size balance.",
+  eye_symmetry_score: "Square your face to the camera and avoid head tilt for cleaner eye symmetry.",
+  eye_size_score: "Keep a neutral expression and stay centered to improve eye size balance.",
+  nose_symmetry_score: "Align your nose box with the center target to improve nose symmetry score.",
+  nose_size_score: "Maintain consistent distance to the camera to stabilize nose size balance.",
+  mouth_symmetry_score: "Use a relaxed, neutral mouth position and keep your face straight.",
+  mouth_size_score: "Avoid exaggerated expressions so mouth size balance reads accurately.",
+  chin_symmetry_score: "Keep your chin level and avoid turning your head for better chin symmetry.",
+  chin_size_score: "Hold a natural head angle and steady distance to improve chin size balance.",
+};
+
+function scoreBand(score) {
+  const normalized = Number.isFinite(Number(score)) ? Number(score) : 0;
+  if (normalized >= 85) return "Excellent";
+  if (normalized >= 70) return "Good";
+  return "Needs Work";
+}
+
+function buildPriorityTips(metrics) {
+  const ranked = Object.entries(metrics)
+    .filter(([key, value]) => PERCENT_METRIC_KEYS.has(key) && key !== "facial_hair_presence" && Number.isFinite(Number(value)))
+    .map(([key, value]) => ({ key, score: Number(value) }))
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 3);
+
+  return ranked.map((item) => {
+    const label = METRIC_LABELS[item.key] || item.key;
+    const action = METRIC_ACTION_TIPS[item.key] || "Retake with steadier alignment and lighting.";
+    return `Priority fix — ${label} (${item.score.toFixed(2)}%): ${action}`;
+  });
+}
+
 function renderTips(tips) {
   tipsList.innerHTML = "";
   for (const tip of tips) {
-    const li     = document.createElement("li");
+    const li      = document.createElement("li");
     li.textContent = tip;
     tipsList.appendChild(li);
   }
 }
 
 function renderMetrics(metrics) {
-  const labels = {
-    brightness_score:    "Brightness quality",
-    contrast_score:      "Contrast quality",
-    blur_quality_score:  "Blur quality",
-    face_area_score:     "Face area quality",
-    face_centering_score: "Face centering quality",
-    face_sharpness_score: "Face sharpness quality",
-    facial_hair_presence: "Facial hair presence",
-    eyebrow_symmetry_score: "Eyebrow symmetry",
-    eyebrow_size_score:  "Eyebrow size balance",
-    eye_symmetry_score:  "Eye symmetry",
-    eye_size_score:      "Eye size balance",
-    nose_symmetry_score: "Nose symmetry",
-    nose_size_score:     "Nose size balance",
-    mouth_symmetry_score: "Mouth symmetry",
-    mouth_size_score:    "Mouth size balance",
-    chin_symmetry_score: "Chin symmetry",
-    chin_size_score:     "Chin size balance",
-  };
-  const featurePercentKeys = new Set([
-    "brightness_score",
-    "contrast_score",
-    "blur_quality_score",
-    "face_area_score",
-    "face_centering_score",
-    "face_sharpness_score",
-    "eyebrow_symmetry_score",
-    "eyebrow_size_score",
-    "eye_symmetry_score",
-    "eye_size_score",
-    "nose_symmetry_score",
-    "nose_size_score",
-    "mouth_symmetry_score",
-    "mouth_size_score",
-    "chin_symmetry_score",
-    "chin_size_score",
-    "facial_hair_presence",
-  ]);
-
   metricsGrid.innerHTML = "";
   for (const [key, value] of Object.entries(metrics)) {
     const dt         = document.createElement("dt");
-    dt.textContent   = labels[key] || key;
+    dt.textContent   = METRIC_LABELS[key] || key;
     const dd         = document.createElement("dd");
-    if (featurePercentKeys.has(key) && Number.isFinite(Number(value))) {
-      dd.textContent = `${Number(value).toFixed(2)}%`;
+    if (PERCENT_METRIC_KEYS.has(key) && Number.isFinite(Number(value))) {
+      const normalized = Number(value);
+      dd.textContent = `${normalized.toFixed(2)}% (${scoreBand(normalized)})`;
     } else {
       dd.textContent = String(value);
     }
@@ -136,9 +178,10 @@ function applyAnalysisPayload(payload, localAssessment = null, context = selecte
   const mergedMetrics = contextFeatureMetrics
     ? { ...(payload.metrics || {}), ...contextFeatureMetrics }
     : (payload.metrics || {});
+  const priorityTips = buildPriorityTips(mergedMetrics);
 
   setScore(payload.score);
-  renderTips(payload.tips || []);
+  renderTips([...priorityTips, ...(payload.tips || [])]);
   renderMetrics(mergedMetrics);
   renderPiercingFitAssessment(localAssessment);
 }
