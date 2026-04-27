@@ -388,7 +388,17 @@ captureBtn.addEventListener("click", async () => {
   ctx.restore();
 
   if (faceOverlay && faceOverlay.width > 0 && faceOverlay.height > 0) {
-    ctx.drawImage(faceOverlay, 0, 0, captureCanvas.width, captureCanvas.height);
+    const box = renderedTrackedBox || targetTrackedBox;
+    if (box) {
+      const scaleX = captureCanvas.width / faceOverlay.width;
+      const scaleY = captureCanvas.height / faceOverlay.height;
+      drawAccessoryOnlyOverlay(ctx, {
+        x: box.x * scaleX,
+        y: box.y * scaleY,
+        width: box.width * scaleX,
+        height: box.height * scaleY,
+      });
+    }
   }
 
   const blob = await new Promise((resolve) => captureCanvas.toBlob(resolve, "image/jpeg", 0.95));
