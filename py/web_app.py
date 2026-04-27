@@ -19,7 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover
 from flask import Flask, jsonify, redirect, render_template, request
 
 from analyzer import analyze_image
-from suggestions import build_suggestions, calculate_quality_score
+from suggestions import build_suggestions, calculate_metric_scores, calculate_quality_score
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -355,19 +355,11 @@ def build_analysis_payload(image_path: Path) -> dict:
     result = analyze_image(image_path)
     tips = build_suggestions(result, thresholds)
     score = calculate_quality_score(result, thresholds)
+    metric_scores = calculate_metric_scores(result, thresholds)
 
     return {
         "score": round(float(score), 2),
-        "metrics": {
-            "brightness": round(result.brightness, 2),
-            "contrast": round(result.contrast, 2),
-            "blur_score": round(result.blur_score, 2),
-            "height": result.height,
-            "face_area_ratio": round(result.primary_face_area_ratio, 4),
-            "face_center_offset": round(result.primary_face_center_offset, 4),
-            "face_sharpness": round(result.face_sharpness, 2),
-            "facial_hair_presence": round(result.facial_hair_presence, 2),
-        },
+        "metrics": metric_scores,
         "tips": tips,
     }
 
