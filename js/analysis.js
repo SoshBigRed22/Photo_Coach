@@ -78,13 +78,12 @@ function renderTips(tips) {
 
 function renderMetrics(metrics) {
   const labels = {
-    brightness:          "Brightness",
-    contrast:            "Contrast",
-    blur_score:          "Blur",
-    height:              "Height",
-    face_area_ratio:     "Face area (how much of frame your face fills)",
-    face_center_offset:  "Face offset (distance from center target)",
-    face_sharpness:      "Face sharpness (detail clarity on the face)",
+    brightness_score:    "Brightness quality",
+    contrast_score:      "Contrast quality",
+    blur_quality_score:  "Blur quality",
+    face_area_score:     "Face area quality",
+    face_centering_score: "Face centering quality",
+    face_sharpness_score: "Face sharpness quality",
     facial_hair_presence: "Facial hair presence",
     eyebrow_symmetry_score: "Eyebrow symmetry",
     eyebrow_size_score:  "Eyebrow size balance",
@@ -98,6 +97,12 @@ function renderMetrics(metrics) {
     chin_size_score:     "Chin size balance",
   };
   const featurePercentKeys = new Set([
+    "brightness_score",
+    "contrast_score",
+    "blur_quality_score",
+    "face_area_score",
+    "face_centering_score",
+    "face_sharpness_score",
     "eyebrow_symmetry_score",
     "eyebrow_size_score",
     "eye_symmetry_score",
@@ -116,11 +121,7 @@ function renderMetrics(metrics) {
     const dt         = document.createElement("dt");
     dt.textContent   = labels[key] || key;
     const dd         = document.createElement("dd");
-    if (key === "face_area_ratio" && Number.isFinite(Number(value))) {
-      dd.textContent = `${(Number(value) * 100).toFixed(2)}%`;
-    } else if (key === "face_center_offset" && Number.isFinite(Number(value))) {
-      dd.textContent = `${(Number(value) * 100).toFixed(2)}%`;
-    } else if (featurePercentKeys.has(key) && Number.isFinite(Number(value))) {
+    if (featurePercentKeys.has(key) && Number.isFinite(Number(value))) {
       dd.textContent = `${Number(value).toFixed(2)}%`;
     } else {
       dd.textContent = String(value);
