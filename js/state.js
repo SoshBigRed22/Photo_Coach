@@ -80,6 +80,8 @@ let faceMesh             = null;
 let faceMeshInitializing = false;
 let detectedLandmarks    = null;
 let detectedFaceShape    = "oval";  // Default shape
+let liveFeatureMetrics   = null;
+let noseAlignmentReady   = false;
 
 let activeStream             = null;
 let selectedBlob             = null;
