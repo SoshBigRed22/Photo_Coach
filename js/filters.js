@@ -106,6 +106,12 @@ function drawDynamicFaceBox(ctx, box) {
 function drawFilterOverlay(ctx, box) {
   if (selectedFilter === "none") return;
 
+  // Custom overlay: draw the processed inspiration image at the chosen anchor
+  if (selectedFilter === "custom-inspiration") {
+    drawCustomImageOverlay(ctx, box);
+    return;
+  }
+
   const ringColor   = "#cfd6df";
   const strokeColor = "#9099a4";
   const shadowColor = "rgba(0, 0, 0, 0.18)";
@@ -211,6 +217,78 @@ function drawFilterOverlay(ctx, box) {
   ctx.restore();
 }
 
+// ---------------------------------------------------------------------------
+// Custom inspiration image overlay
+// ---------------------------------------------------------------------------
+function getPlacementAnchor(placement, box) {
+  const displayWidth  = Math.round(faceOverlay.clientWidth);
+  const displayHeight = Math.round(faceOverlay.clientHeight);
+
+  switch (placement) {
+    case "septum": {
+      let x = box.x + box.width * 0.5;
+      let y = box.y + box.height * 0.63;
+      if (detectedLandmarks) {
+        const pt = getLandmarkCoordinate(detectedLandmarks, 1, box, displayWidth, displayHeight);
+        if (pt) { x = pt.x; y = pt.y + box.height * 0.08; }
+      }
+      return { x, y };
+    }
+    case "nostril-left": {
+      let x = box.x + box.width * 0.41;
+      let y = box.y + box.height * 0.60;
+      if (detectedLandmarks) {
+        const pt = getLandmarkCoordinate(detectedLandmarks, 130, box, displayWidth, displayHeight);
+        if (pt) { x = pt.x - box.width * 0.08; y = pt.y; }
+      }
+      return { x, y };
+    }
+    case "brow-left": {
+      let x = box.x + box.width * 0.35;
+      let y = box.y + box.height * 0.35;
+      if (detectedLandmarks) {
+        const pt = getLandmarkCoordinate(detectedLandmarks, 285, box, displayWidth, displayHeight);
+        if (pt) { x = pt.x; y = pt.y - box.height * 0.05; }
+      }
+      return { x, y };
+    }
+    case "ear-left": {
+      let x = box.x + box.width * 0.06;
+      let y = box.y + box.height * 0.68;
+      if (detectedLandmarks) {
+        const pt = getLandmarkCoordinate(detectedLandmarks, 234, box, displayWidth, displayHeight);
+        if (pt) { x = pt.x - box.width * 0.05; y = pt.y; }
+      }
+      return { x, y };
+    }
+    case "ear-right": {
+      let x = box.x + box.width * 0.94;
+      let y = box.y + box.height * 0.68;
+      if (detectedLandmarks) {
+        const pt = getLandmarkCoordinate(detectedLandmarks, 454, box, displayWidth, displayHeight);
+        if (pt) { x = pt.x + box.width * 0.05; y = pt.y; }
+      }
+      return { x, y };
+    }
+    default:
+      return { x: box.x + box.width * 0.5, y: box.y + box.height * 0.5 };
+  }
+}
+
+function drawCustomImageOverlay(ctx, box) {
+  if (!customOverlayImage || !customOverlayImage.complete || customOverlayImage.naturalWidth === 0) return;
+  const anchor  = getPlacementAnchor(customOverlayPlacement || "septum", box);
+  const w       = box.width * 0.3 * selectedFilterScale;
+  const h       = w * (customOverlayImage.naturalHeight / customOverlayImage.naturalWidth);
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.drawImage(customOverlayImage, anchor.x - w / 2, anchor.y - h / 2, w, h);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Nose alignment guide
+// ---------------------------------------------------------------------------
 function drawNoseAlignmentGuide(ctx, box) {
   const centerX = faceOverlay.width * 0.5;
   const centerY = faceOverlay.height * 0.5;
