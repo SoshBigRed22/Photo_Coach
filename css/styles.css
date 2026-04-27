@@ -286,45 +286,7 @@ button:disabled {
   line-height: 1.3;
 }
 
-.pinterest-connect-row,
-.pinterest-board-row,
-.pinterest-pin-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
 
-.pinterest-connect-status {
-  margin: 0 0 8px;
-  font-size: 0.82rem;
-  color: rgba(26, 27, 29, 0.72);
-}
-
-#pinterestBoardSelect {
-  flex: 1;
-  min-width: 0;
-  border-radius: 10px;
-  border: 1px solid var(--edge);
-  background: #ffffff;
-  padding: 10px 12px;
-  font: inherit;
-  color: var(--ink);
-}
-
-#refreshPinterestBoardsBtn,
-#loadPinterestPinsBtn,
-#disconnectPinterestBtn {
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-#disconnectPinterestBtn {
-  background: #7a3e2f;
-}
-
-#disconnectPinterestBtn:hover {
-  background: #5e3024;
-}
 
 .inspiration-form-row {
   display: grid;
