@@ -37,6 +37,24 @@ function parseStyleTokens(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Placement inference from style tokens
+// ---------------------------------------------------------------------------
+const TOKEN_TO_PLACEMENT = {
+  "septum":           "septum",
+  "nose-stud-left":   "nostril-left",
+  "brow-left":        "brow-left",
+  "earring-left":     "ear-left",
+  "earring-right":    "ear-right",
+};
+
+function inferPlacement(styleTokens) {
+  for (const token of (styleTokens || [])) {
+    if (TOKEN_TO_PLACEMENT[token]) return TOKEN_TO_PLACEMENT[token];
+  }
+  return "septum"; // default
+}
+
+// ---------------------------------------------------------------------------
 // Inspiration-entry CRUD
 // ---------------------------------------------------------------------------
 function addInspirationEntry(rawUrl, note = "") {
@@ -47,19 +65,27 @@ function addInspirationEntry(rawUrl, note = "") {
     throw new Error("That Pinterest link is already in your inspiration list.");
   }
 
-  const combined = `${normalizedUrl} ${note}`;
-  const entry    = {
-    id:          `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    url:         normalizedUrl,
-    note:        note.trim(),
-    styleTokens: parseStyleTokens(combined),
-    addedAt:     Date.now(),
+  const combined    = `${normalizedUrl} ${note}`;
+  const styleTokens = parseStyleTokens(combined);
+  const entry       = {
+    id:               `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    url:              normalizedUrl,
+    note:             note.trim(),
+    styleTokens,
+    addedAt:          Date.now(),
+    placement:        inferPlacement(styleTokens),
+    processedImage:   null,
+    processingStatus: "loading",
+    processingError:  null,
   };
 
   inspirationEntries = [entry, ...inspirationEntries].slice(0, 12);
   persistInspirationEntries();
   renderInspirationEntries();
   selectedPhotoContext = buildPhotoContext(selectedPhotoContext?.source || "empty");
+
+  // Kick off background-removal fetch (fire-and-forget; errors stored in entry)
+  processPinImage(entry.id, normalizedUrl);
 }
 
 function removeInspirationEntry(id) {
@@ -74,6 +100,52 @@ function clearInspirationEntries() {
   persistInspirationEntries();
   renderInspirationEntries();
   selectedPhotoContext = buildPhotoContext(selectedPhotoContext?.source || "empty");
+}
+
+// ---------------------------------------------------------------------------
+// Async image fetch + background removal
+// ---------------------------------------------------------------------------
+async function processPinImage(entryId, url) {
+  try {
+    const resp = await fetch(`${API_BASE}/api/fetch-pin-image`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ url }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+
+    const idx = inspirationEntries.findIndex((e) => e.id === entryId);
+    if (idx !== -1) {
+      inspirationEntries[idx].processedImage   = data.image;
+      inspirationEntries[idx].processingStatus = "done";
+      inspirationEntries[idx].processingError  = null;
+    }
+  } catch (err) {
+    const idx = inspirationEntries.findIndex((e) => e.id === entryId);
+    if (idx !== -1) {
+      inspirationEntries[idx].processingStatus = "failed";
+      inspirationEntries[idx].processingError  = err.message || "Processing failed.";
+    }
+  } finally {
+    persistInspirationEntries();
+    renderInspirationEntries();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Apply a processed pin as the live overlay
+// ---------------------------------------------------------------------------
+function applyInspirationOverlay(entry) {
+  if (!entry.processedImage) return;
+  const img  = new Image();
+  img.onload = () => {
+    customOverlayImage     = img;
+    customOverlayPlacement = entry.placement || "septum";
+    if (filterSelect) filterSelect.value = "custom-inspiration";
+    applyFilterControlState();
+  };
+  img.src = entry.processedImage;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,15 +168,22 @@ function loadInspirationEntries() {
 
     inspirationEntries = parsed
       .filter((entry) => entry && typeof entry.url === "string")
-      .map((entry) => ({
-        id:          String(entry.id || `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
-        url:         normalizePinterestUrl(entry.url) || entry.url,
-        note:        typeof entry.note === "string" ? entry.note : "",
-        styleTokens: Array.isArray(entry.styleTokens)
+      .map((entry) => {
+        const styleTokens = Array.isArray(entry.styleTokens)
           ? entry.styleTokens
-          : parseStyleTokens(`${entry.url} ${entry.note || ""}`),
-        addedAt:     Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now(),
-      }))
+          : parseStyleTokens(`${entry.url} ${entry.note || ""}`);
+        return {
+          id:               String(entry.id || `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+          url:              normalizePinterestUrl(entry.url) || entry.url,
+          note:             typeof entry.note === "string" ? entry.note : "",
+          styleTokens,
+          addedAt:          Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now(),
+          placement:        entry.placement || inferPlacement(styleTokens),
+          processedImage:   entry.processedImage || null,
+          processingStatus: entry.processedImage ? "done" : (entry.processingStatus || "idle"),
+          processingError:  entry.processingError || null,
+        };
+      })
       .filter((entry) => entry.url && entry.url.includes("pinterest"))
       .slice(0, 12);
   } catch {
@@ -159,23 +238,121 @@ function renderInspirationEntries() {
     ? `Loaded ${preference.totalPins} pin(s). Current vibe leans toward ${filterLabel(preference.dominantFilter)}.`
     : `Loaded ${preference.totalPins} pin(s). Add notes like "septum" or "hoop" for sharper matching.`;
 
+  const PLACEMENT_OPTIONS = [
+    { value: "septum",       label: "Septum / Nose Bridge" },
+    { value: "nostril-left", label: "Left Nostril" },
+    { value: "brow-left",    label: "Left Eyebrow" },
+    { value: "ear-left",     label: "Left Ear" },
+    { value: "ear-right",    label: "Right Ear" },
+  ];
+
   for (const entry of inspirationEntries) {
-    const li        = document.createElement("li");
-    const link      = document.createElement("a");
-    link.href        = entry.url;
-    link.target      = "_blank";
-    link.rel         = "noopener noreferrer";
-    link.textContent = entry.note || entry.url;
+    const li      = document.createElement("li");
+    li.className  = "inspiration-entry-card";
 
-    const removeBtn        = document.createElement("button");
-    removeBtn.type         = "button";
-    removeBtn.textContent  = "Remove";
-    removeBtn.className    = "inspiration-remove-btn";
+    // — Thumbnail area —
+    const thumbWrap     = document.createElement("div");
+    thumbWrap.className = "inspiration-thumb-wrap";
+
+    if (entry.processedImage) {
+      const img    = document.createElement("img");
+      img.className = "inspiration-thumb";
+      img.src      = entry.processedImage;
+      img.alt      = entry.note || "Inspiration image";
+      thumbWrap.appendChild(img);
+    } else if (entry.processingStatus === "loading") {
+      const loading     = document.createElement("span");
+      loading.className = "inspiration-loading";
+      loading.textContent = "Processing…";
+      thumbWrap.appendChild(loading);
+    } else if (entry.processingStatus === "failed") {
+      const fail     = document.createElement("span");
+      fail.className = "inspiration-failed";
+      fail.title     = entry.processingError || "Failed";
+      fail.textContent = "✗";
+      thumbWrap.appendChild(fail);
+
+      const retryBtn       = document.createElement("button");
+      retryBtn.type        = "button";
+      retryBtn.className   = "inspiration-retry-btn";
+      retryBtn.textContent = "Retry";
+      retryBtn.addEventListener("click", () => {
+        const idx = inspirationEntries.findIndex((e) => e.id === entry.id);
+        if (idx !== -1) {
+          inspirationEntries[idx].processingStatus = "loading";
+          inspirationEntries[idx].processingError  = null;
+          persistInspirationEntries();
+          renderInspirationEntries();
+          processPinImage(entry.id, entry.url);
+        }
+      });
+      thumbWrap.appendChild(retryBtn);
+    } else {
+      const noImg     = document.createElement("span");
+      noImg.className = "inspiration-no-image";
+      noImg.textContent = "—";
+      thumbWrap.appendChild(noImg);
+    }
+
+    li.appendChild(thumbWrap);
+
+    // — Info area —
+    const infoDiv     = document.createElement("div");
+    infoDiv.className = "inspiration-info";
+
+    const link         = document.createElement("a");
+    link.href          = entry.url;
+    link.target        = "_blank";
+    link.rel           = "noopener noreferrer";
+    link.textContent   = entry.note || entry.url;
+    infoDiv.appendChild(link);
+
+    // Placement selector
+    const placementLabel     = document.createElement("label");
+    placementLabel.className = "inspiration-placement-label";
+    placementLabel.textContent = "Place at: ";
+
+    const placementSel     = document.createElement("select");
+    placementSel.className = "inspiration-placement-sel";
+    for (const opt of PLACEMENT_OPTIONS) {
+      const option       = document.createElement("option");
+      option.value       = opt.value;
+      option.textContent = opt.label;
+      if (opt.value === (entry.placement || "septum")) option.selected = true;
+      placementSel.appendChild(option);
+    }
+    placementSel.addEventListener("change", () => {
+      const idx = inspirationEntries.findIndex((e) => e.id === entry.id);
+      if (idx !== -1) {
+        inspirationEntries[idx].placement = placementSel.value;
+        persistInspirationEntries();
+      }
+    });
+    placementLabel.appendChild(placementSel);
+    infoDiv.appendChild(placementLabel);
+
+    // Action buttons
+    const actionsDiv     = document.createElement("div");
+    actionsDiv.className = "inspiration-actions";
+
+    if (entry.processedImage) {
+      const applyBtn       = document.createElement("button");
+      applyBtn.type        = "button";
+      applyBtn.className   = "inspiration-apply-btn";
+      applyBtn.textContent = "Apply Overlay";
+      applyBtn.addEventListener("click", () => applyInspirationOverlay(entry));
+      actionsDiv.appendChild(applyBtn);
+    }
+
+    const removeBtn       = document.createElement("button");
+    removeBtn.type        = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.className   = "inspiration-remove-btn";
     removeBtn.addEventListener("click", () => removeInspirationEntry(entry.id));
+    actionsDiv.appendChild(removeBtn);
 
-    li.appendChild(link);
-    li.appendChild(document.createTextNode(" "));
-    li.appendChild(removeBtn);
+    infoDiv.appendChild(actionsDiv);
+    li.appendChild(infoDiv);
     inspirationList.appendChild(li);
   }
 }
