@@ -1,11 +1,10 @@
 {
+  "brightness_fail_min": 25,
+  "brightness_warn_min": 50,
   "brightness_min": 80,
   "brightness_max": 190,
   "contrast_min": 35,
   "blur_min": 120,
-  "noise_max": 12,
-  "min_width": 1080,
-  "min_height": 1080,
   "face_area_ratio_min": 0.08,
   "face_center_offset_max": 0.22,
   "face_sharpness_min": 180
