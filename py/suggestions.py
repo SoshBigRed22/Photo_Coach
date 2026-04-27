@@ -1,298 +1,163 @@
-// ---------------------------------------------------------------------------
-// analysis.js — Score/tips/metrics rendering, piercing-fit assessment,
-//               photo context builder, and the main analyzeBlob pipeline.
-//
-// Depends on: state.js, filters.js (applyFilterControlState sets selectedFilter)
-//             pinterest.js (inferInspirationPreference)
-// ---------------------------------------------------------------------------
+from __future__ import annotations
 
-// ---------------------------------------------------------------------------
-// Score helpers
-// ---------------------------------------------------------------------------
-function scoreClass(score) {
-  const normalized = Number.isFinite(Number(score)) ? Number(score) : 0;
-  if (normalized >= 80) return "good";
-  if (normalized >= 60) return "mid";
-  return "low";
-}
+import json
+from pathlib import Path
 
-function filterLabel(filterKey) {
-  return FILTER_LABELS[filterKey] || "Selected Piercing";
-}
+from analyzer import AnalysisResult
 
-// ---------------------------------------------------------------------------
-// Photo-context snapshot (used to capture state at moment of capture/upload)
-// ---------------------------------------------------------------------------
-function buildPhotoContext(source) {
-  const activeBox    = renderedTrackedBox || targetTrackedBox;
-  const overlayWidth = faceOverlay?.width || faceOverlay?.clientWidth || 0;
-  const inspiration  = inferInspirationPreference(inspirationEntries);
 
-  return {
-    source,
-    filter:          selectedFilter,
-    filterScale:     selectedFilterScale,
-    faceShape:       detectedLandmarks ? detectedFaceShape : null,
-    faceDetected:    Boolean(detectedLandmarks || activeBox),
-    faceWidthRatio:  activeBox && overlayWidth ? activeBox.width / overlayWidth : null,
-    featureMetrics:  liveFeatureMetrics ? { ...liveFeatureMetrics } : null,
-    inspiration,
-  };
-}
+def load_thresholds(config_path: Path) -> dict:
+    with config_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
-// ---------------------------------------------------------------------------
-// Cover-fit video frame draw helper (used during capture)
-// ---------------------------------------------------------------------------
-function drawVideoCoverFrame(ctx, source, sourceWidth, sourceHeight, destWidth, destHeight) {
-  const scale      = Math.max(destWidth / sourceWidth, destHeight / sourceHeight);
-  const drawWidth  = sourceWidth  * scale;
-  const drawHeight = sourceHeight * scale;
-  const offsetX    = (destWidth  - drawWidth)  / 2;
-  const offsetY    = (destHeight - drawHeight) / 2;
 
-  ctx.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
-}
+def calculate_metric_scores(result: AnalysisResult, thresholds: dict) -> dict[str, float]:
+    """Return normalized term scores where 0.00 is poor and 100.00 is excellent."""
+    brightness_fail_min = thresholds.get("brightness_fail_min", 25)
+    brightness_warn_min = thresholds.get("brightness_warn_min", 50)
+    brightness_min = thresholds.get("brightness_min", 80)
+    brightness_max = thresholds.get("brightness_max", 190)
+    contrast_min = thresholds.get("contrast_min", 35)
+    blur_min = thresholds.get("blur_min", 120)
+    face_area_ratio_min = thresholds.get("face_area_ratio_min", 0.08)
+    face_center_offset_max = thresholds.get("face_center_offset_max", 0.22)
+    face_sharpness_min = thresholds.get("face_sharpness_min", 180)
 
-// ---------------------------------------------------------------------------
-// Results rendering
-// ---------------------------------------------------------------------------
-function setScore(score) {
-  const normalizedScore = Number.isFinite(Number(score)) ? Number(score) : 0;
-  scorePill.textContent = `Score: ${normalizedScore.toFixed(2)}%`;
-  const cls             = scoreClass(score);
-  scorePill.style.background = cls === "good"
-    ? "rgba(19, 111, 99, 0.14)"
-    : cls === "mid"
-      ? "rgba(207, 106, 50, 0.18)"
-      : "rgba(154, 31, 31, 0.16)";
-}
+    if result.brightness < brightness_fail_min:
+        brightness_score = 0.0
+    elif result.brightness < brightness_warn_min:
+        brightness_score = max(0.0, 100.0 - ((brightness_warn_min - result.brightness) * 4.0))
+    elif result.brightness < brightness_min:
+        brightness_score = max(0.0, 100.0 - ((brightness_min - result.brightness) * 1.2))
+    elif result.brightness <= brightness_max:
+        brightness_score = 100.0
+    else:
+        brightness_score = max(0.0, 100.0 - ((result.brightness - brightness_max) * 1.1))
 
-function renderTips(tips) {
-  tipsList.innerHTML = "";
-  for (const tip of tips) {
-    const li     = document.createElement("li");
-    li.textContent = tip;
-    tipsList.appendChild(li);
-  }
-}
+    contrast_score = 100.0 if result.contrast >= contrast_min else max(0.0, 100.0 - ((contrast_min - result.contrast) * 2.2))
+    blur_quality_score = 100.0 if result.blur_score >= blur_min else max(0.0, 100.0 - ((blur_min - result.blur_score) * 0.8))
 
-function renderMetrics(metrics) {
-  const labels = {
-    brightness_score:    "Brightness quality",
-    contrast_score:      "Contrast quality",
-    blur_quality_score:  "Blur quality",
-    face_area_score:     "Face area quality",
-    face_centering_score: "Face centering quality",
-    face_sharpness_score: "Face sharpness quality",
-    facial_hair_presence: "Facial hair presence",
-    eyebrow_symmetry_score: "Eyebrow symmetry",
-    eyebrow_size_score:  "Eyebrow size balance",
-    eye_symmetry_score:  "Eye symmetry",
-    eye_size_score:      "Eye size balance",
-    nose_symmetry_score: "Nose symmetry",
-    nose_size_score:     "Nose size balance",
-    mouth_symmetry_score: "Mouth symmetry",
-    mouth_size_score:    "Mouth size balance",
-    chin_symmetry_score: "Chin symmetry",
-    chin_size_score:     "Chin size balance",
-  };
-  const featurePercentKeys = new Set([
-    "brightness_score",
-    "contrast_score",
-    "blur_quality_score",
-    "face_area_score",
-    "face_centering_score",
-    "face_sharpness_score",
-    "eyebrow_symmetry_score",
-    "eyebrow_size_score",
-    "eye_symmetry_score",
-    "eye_size_score",
-    "nose_symmetry_score",
-    "nose_size_score",
-    "mouth_symmetry_score",
-    "mouth_size_score",
-    "chin_symmetry_score",
-    "chin_size_score",
-    "facial_hair_presence",
-  ]);
+    if result.primary_face_box is None:
+        face_area_score = 0.0
+        face_centering_score = 0.0
+        face_sharpness_score = 0.0
+    else:
+        face_area_score = 100.0 if result.primary_face_area_ratio >= face_area_ratio_min else max(
+            0.0,
+            100.0 - ((face_area_ratio_min - result.primary_face_area_ratio) * 1000.0),
+        )
+        face_centering_score = 100.0 if result.primary_face_center_offset <= face_center_offset_max else max(
+            0.0,
+            100.0 - ((result.primary_face_center_offset - face_center_offset_max) * 360.0),
+        )
+        face_sharpness_score = 100.0 if result.face_sharpness >= face_sharpness_min else max(
+            0.0,
+            100.0 - ((face_sharpness_min - result.face_sharpness) * 0.55),
+        )
 
-  metricsGrid.innerHTML = "";
-  for (const [key, value] of Object.entries(metrics)) {
-    const dt         = document.createElement("dt");
-    dt.textContent   = labels[key] || key;
-    const dd         = document.createElement("dd");
-    if (featurePercentKeys.has(key) && Number.isFinite(Number(value))) {
-      dd.textContent = `${Number(value).toFixed(2)}%`;
-    } else {
-      dd.textContent = String(value);
-    }
-    metricsGrid.appendChild(dt);
-    metricsGrid.appendChild(dd);
-  }
-}
-
-function applyAnalysisPayload(payload, localAssessment = null, context = selectedPhotoContext) {
-  const contextFeatureMetrics = context?.featureMetrics || null;
-  const mergedMetrics = contextFeatureMetrics
-    ? { ...(payload.metrics || {}), ...contextFeatureMetrics }
-    : (payload.metrics || {});
-
-  setScore(payload.score);
-  renderTips(payload.tips || []);
-  renderMetrics(mergedMetrics);
-  renderPiercingFitAssessment(localAssessment);
-}
-
-// ---------------------------------------------------------------------------
-// Piercing fit panel rendering
-// ---------------------------------------------------------------------------
-function renderPiercingFitAssessment(assessment) {
-  if (!piercingFitPanel || !piercingFitScore || !piercingFitSummary || !piercingFitList) return;
-
-  if (!assessment) {
-    piercingFitPanel.hidden  = true;
-    piercingFitList.innerHTML = "";
-    return;
-  }
-
-  piercingFitPanel.hidden       = false;
-  piercingFitScore.textContent  = `Piercing Fit: ${assessment.score}/100`;
-
-  const fitClass = scoreClass(assessment.score);
-  piercingFitScore.style.background = fitClass === "good"
-    ? "rgba(19, 111, 99, 0.14)"
-    : fitClass === "mid"
-      ? "rgba(207, 106, 50, 0.18)"
-      : "rgba(154, 31, 31, 0.16)";
-  piercingFitScore.style.color = fitClass === "low" ? "var(--danger)" : "var(--accent-strong)";
-
-  piercingFitSummary.textContent = assessment.summary;
-  piercingFitList.innerHTML      = "";
-  for (const item of assessment.details) {
-    const li     = document.createElement("li");
-    li.textContent = item;
-    piercingFitList.appendChild(li);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Piercing fit assessment logic
-// ---------------------------------------------------------------------------
-function assessPiercingFit(context) {
-  if (!context || !context.filter || context.filter === "none") return null;
-
-  const guide   = PIERCING_STYLE_GUIDE[context.filter];
-  const label   = filterLabel(context.filter);
-  const details = [];
-  let   score   = 72;
-
-  if (!context.faceDetected) {
     return {
-      score:   58,
-      summary: `${label} was kept in the captured image, but I could not read enough face geometry to judge the fit confidently.`,
-      details: [
-        "Try capturing with your full face centered and well lit for a stronger fit reading.",
-        `If you want a safer default instead, start with ${filterLabel("nose-stud-left")}.`,
-      ],
-    };
-  }
-
-  if (context.faceShape) {
-    if (guide.preferredShapes.includes(context.faceShape)) {
-      score += 16;
-      details.push(`${label} suits ${context.faceShape} faces well, so the shape match is strong.`);
-    } else if (guide.flexibleShapes.includes(context.faceShape)) {
-      score += 6;
-      details.push(`${label} can work on a ${context.faceShape} face, but placement and size matter more.`);
-    } else {
-      score -= 12;
-      const alt = guide.alternatives[0] || "nose-stud-left";
-      details.push(`${label} is a weaker match for a ${context.faceShape} face shape.`);
-      details.push(`A better starting point would be ${filterLabel(alt)}.`);
+        "brightness_score": round(brightness_score, 2),
+        "contrast_score": round(contrast_score, 2),
+        "blur_quality_score": round(blur_quality_score, 2),
+        "face_area_score": round(face_area_score, 2),
+        "face_centering_score": round(face_centering_score, 2),
+        "face_sharpness_score": round(face_sharpness_score, 2),
+        "facial_hair_presence": round(float(result.facial_hair_presence), 2),
     }
-  } else {
-    details.push("Face shape was not locked at capture time, so this fit score is based on the live overlay only.");
-  }
 
-  if (context.filterScale > 1.22) {
-    score -= 8;
-    details.push("The selected size reads a little large, so the piercing pulls focus more than it should.");
-  } else if (context.filterScale < 0.82) {
-    score -= 5;
-    details.push("The selected size is slightly understated, which can make the piercing disappear in the frame.");
-  } else {
-    score += 5;
-    details.push("The current size is close to a natural fit for the tracked face width.");
-  }
 
-  if (context.faceWidthRatio !== null) {
-    if (context.filter.startsWith("earring") && context.faceWidthRatio < 0.26) {
-      score -= 6;
-      details.push("The face reads narrow in frame, so the hoop can feel oversized unless scaled down a bit.");
-    } else if (context.filter === "septum" && context.faceWidthRatio > 0.34) {
-      score += 4;
-      details.push("The stronger face presence in frame helps the septum ring hold visual balance.");
-    }
-  }
+def build_suggestions(result: AnalysisResult, thresholds: dict) -> list[str]:
+    tips: list[str] = []
 
-  if (context.inspiration && context.inspiration.dominantFilter) {
-    if (context.inspiration.dominantFilter === context.filter) {
-      score += 7;
-      details.push(`Your saved inspiration leans toward ${filterLabel(context.filter)}, so this pick matches your personal style direction.`);
-    } else {
-      score -= 4;
-      details.push(`Your saved inspiration leans toward ${filterLabel(context.inspiration.dominantFilter)}, which differs from this selection.`);
-      if (context.inspiration.confidence >= 0.45) {
-        details.push(`Style-forward alternative: ${filterLabel(context.inspiration.dominantFilter)}.`);
-      }
-    }
-  }
+    brightness_fail_min = thresholds.get("brightness_fail_min", 25)
+    brightness_warn_min = thresholds.get("brightness_warn_min", 50)
+    brightness_min = thresholds.get("brightness_min", 80)
+    brightness_max = thresholds.get("brightness_max", 190)
+    contrast_min = thresholds.get("contrast_min", 35)
+    blur_min = thresholds.get("blur_min", 120)
+    face_area_ratio_min = thresholds.get("face_area_ratio_min", 0.08)
+    face_center_offset_max = thresholds.get("face_center_offset_max", 0.22)
+    face_sharpness_min = thresholds.get("face_sharpness_min", 180)
 
-  details.push(guide.note);
-  score = Math.max(40, Math.min(96, Math.round(score)));
+    if result.brightness < brightness_fail_min:
+        return [
+            "Lighting is too dark to evaluate your face reliably. Move to a brighter area before taking a photo.",
+            "Use front-facing light on your face so tracking and scoring can run accurately.",
+        ]
 
-  const recommendedFilter = (score >= 70 ? context.filter : guide.alternatives[0]) || context.filter;
-  const summary = score >= 82
-    ? `${label} looks like a strong match for this face and frame.`
-    : score >= 68
-      ? `${label} works reasonably well, but a small sizing or style change could improve it.`
-      : `${label} is probably not the best match here.`;
+    if result.brightness < brightness_warn_min:
+        tips.append("Lighting is dim. Move to a brighter area for a more accurate face read and recommendations.")
 
-  if (recommendedFilter !== context.filter) {
-    details.push(`Recommended instead: ${filterLabel(recommendedFilter)}.`);
-  }
+    if result.brightness < brightness_min:
+        tips.append("Image is too dark: add front lighting or increase exposure slightly.")
+    elif result.brightness > brightness_max:
+        tips.append("Image is too bright: reduce exposure or move away from harsh light.")
 
-  if (context.inspiration && context.inspiration.dominantFilter && context.inspiration.confidence >= 0.45 && score < 84) {
-    details.push(`Inspiration-first option: ${filterLabel(context.inspiration.dominantFilter)}.`);
-  }
+    if result.contrast < contrast_min:
+        tips.append("Low contrast: separate subject from background and improve directional light.")
 
-  return { score, summary, details };
-}
+    if result.blur_score < blur_min:
+        tips.append("Photo appears blurry: steady the phone/camera and refocus before capture.")
 
-// ---------------------------------------------------------------------------
-// Send blob to backend analysis endpoint
-// ---------------------------------------------------------------------------
-async function analyzeBlob(blob, context = selectedPhotoContext) {
-  const formData = new FormData();
-  formData.append("photo", blob, "photo.jpg");
+    if result.primary_face_box is None:
+        tips.append("No clear face found: keep your face visible and avoid heavy backlighting.")
+    else:
+        if result.primary_face_area_ratio < face_area_ratio_min:
+            tips.append("Face appears too small: move closer or crop tighter around the subject.")
 
-  analyzeBtn.disabled   = true;
-  analyzeBtn.textContent = "Analyzing...";
+        if result.primary_face_center_offset > face_center_offset_max:
+            tips.append("Subject is off-center: align face closer to center for a cleaner selfie composition.")
 
-  try {
-    const response = await fetch(`${API_BASE}/api/analyze`, {
-      method: "POST",
-      body:   formData,
-    });
+        if result.face_sharpness < face_sharpness_min:
+            tips.append("Face detail is soft: tap-to-focus on eyes and steady the camera before capture.")
 
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Analyze request failed.");
+    if not tips:
+        tips.append("Great base photo quality. Try minor edits like crop and white balance tuning.")
 
-    applyAnalysisPayload(payload, assessPiercingFit(context), context);
-  } catch (error) {
-    alert(error.message);
-  } finally {
-    analyzeBtn.disabled   = false;
-    analyzeBtn.textContent = "Analyze Photo";
-  }
-}
+    return tips
+
+
+def calculate_quality_score(result: AnalysisResult, thresholds: dict) -> float:
+    """Return a weighted quality score from 0.00 to 100.00."""
+    brightness_fail_min = thresholds.get("brightness_fail_min", 25)
+    brightness_warn_min = thresholds.get("brightness_warn_min", 50)
+    brightness_min = thresholds.get("brightness_min", 80)
+    brightness_max = thresholds.get("brightness_max", 190)
+    contrast_min = thresholds.get("contrast_min", 35)
+    blur_min = thresholds.get("blur_min", 120)
+    face_area_ratio_min = thresholds.get("face_area_ratio_min", 0.08)
+    face_center_offset_max = thresholds.get("face_center_offset_max", 0.22)
+    face_sharpness_min = thresholds.get("face_sharpness_min", 180)
+
+    if result.brightness < brightness_fail_min:
+        return 0.0
+
+    score = 100.0
+
+    if result.brightness < brightness_warn_min:
+        score -= min(22.0, (brightness_warn_min - result.brightness) * 0.88)
+
+    if result.brightness < brightness_min:
+        score -= min(20.0, (brightness_min - result.brightness) * 0.35)
+    elif result.brightness > brightness_max:
+        score -= min(15.0, (result.brightness - brightness_max) * 0.25)
+
+    if result.contrast < contrast_min:
+        score -= min(20.0, (contrast_min - result.contrast) * 0.5)
+
+    if result.blur_score < blur_min:
+        score -= min(30.0, (blur_min - result.blur_score) * 0.08)
+
+    if result.primary_face_box is None:
+        score -= 20.0
+    else:
+        if result.primary_face_area_ratio < face_area_ratio_min:
+            score -= min(12.0, (face_area_ratio_min - result.primary_face_area_ratio) * 120.0)
+
+        if result.primary_face_center_offset > face_center_offset_max:
+            score -= min(8.0, (result.primary_face_center_offset - face_center_offset_max) * 25.0)
+
+        if result.face_sharpness < face_sharpness_min:
+            score -= min(15.0, (face_sharpness_min - result.face_sharpness) * 0.08)
+
+    return round(max(0.0, min(100.0, score)), 2)
