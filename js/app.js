@@ -1,4 +1,4 @@
-﻿// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // app.js — Entry point
 //
 // All shared state, DOM refs, and helper functions live in the module files
@@ -429,9 +429,6 @@ configureHostedModeUI();
 applyFilterControlState();
 loadInspirationEntries();
 renderInspirationEntries();
-loadPinterestAuthHandle();
-void loadPinterestConfig();
-void syncPinterestStatus();
 populateCameraSelect().catch((error) => {
   console.error("[PhotoCoach] initial camera scan error:", error);
   setCameraStatus("Could not scan camera devices yet. Click Refresh.");
