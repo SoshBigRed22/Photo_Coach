@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
-def show_preview(image_path: Path, score: int, tips: list[str], face_box: tuple[int, int, int, int] | None) -> None:
+def show_preview(image_path: Path, score: float, tips: list[str], face_box: tuple[int, int, int, int] | None) -> None:
 	image = cv2.imread(str(image_path))
 	if image is None:
 		return
@@ -51,7 +51,7 @@ def show_preview(image_path: Path, score: int, tips: list[str], face_box: tuple[
 	preview = cv2.addWeighted(overlay, 0.5, image, 0.5, 0)
 
 	score_color = (60, 200, 90) if score >= 80 else (30, 180, 240) if score >= 60 else (45, 60, 220)
-	cv2.putText(preview, f"Quality Score: {score}/100", (20, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.0, score_color, 2, cv2.LINE_AA)
+	cv2.putText(preview, f"Quality Score: {score:.2f}%", (20, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.0, score_color, 2, cv2.LINE_AA)
 
 	max_tips = 3
 	for i, tip in enumerate(tips[:max_tips], start=1):
@@ -100,17 +100,17 @@ def main() -> None:
 	score = calculate_quality_score(result, thresholds)
 
 	print("\nAnalysis Summary")
-	print(f"- Quality:    {score}/100")
+	print(f"- Quality:    {score:.2f}%")
 	print(f"- Brightness: {result.brightness:.1f}")
 	print(f"- Contrast:   {result.contrast:.1f}")
 	print(f"- Blur score: {result.blur_score:.1f}")
-	print(f"- Noise:      {result.noise_score:.1f}")
-	print(f"- Size:       {result.width}x{result.height}")
-	print(f"- Faces:      {result.face_count}")
-	if result.face_count > 0:
+	if result.primary_face_box is not None:
 		print(f"- Face area:  {result.primary_face_area_ratio:.3f}")
 		print(f"- Face offset:{result.primary_face_center_offset:.3f}")
 		print(f"- Face sharp: {result.face_sharpness:.1f}")
+		print(f"- Facial hair presence: {result.facial_hair_presence:.1f}")
+	else:
+		print("- Face:       Not confidently detected")
 
 	print("\nSuggestions")
 	for i, tip in enumerate(tips, start=1):
