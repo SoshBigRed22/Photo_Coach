@@ -14,16 +14,24 @@ def load_thresholds(config_path: Path) -> dict:
 def build_suggestions(result: AnalysisResult, thresholds: dict) -> list[str]:
     tips: list[str] = []
 
+    brightness_fail_min = thresholds.get("brightness_fail_min", 25)
+    brightness_warn_min = thresholds.get("brightness_warn_min", 50)
     brightness_min = thresholds.get("brightness_min", 80)
     brightness_max = thresholds.get("brightness_max", 190)
     contrast_min = thresholds.get("contrast_min", 35)
     blur_min = thresholds.get("blur_min", 120)
-    noise_max = thresholds.get("noise_max", 12)
-    min_width = thresholds.get("min_width", 1080)
-    min_height = thresholds.get("min_height", 1080)
     face_area_ratio_min = thresholds.get("face_area_ratio_min", 0.08)
     face_center_offset_max = thresholds.get("face_center_offset_max", 0.22)
     face_sharpness_min = thresholds.get("face_sharpness_min", 180)
+
+    if result.brightness < brightness_fail_min:
+        return [
+            "Lighting is too dark to evaluate your face reliably. Move to a brighter area before taking a photo.",
+            "Use front-facing light on your face so tracking and scoring can run accurately.",
+        ]
+
+    if result.brightness < brightness_warn_min:
+        tips.append("Lighting is dim. Move to a brighter area for a more accurate face read and recommendations.")
 
     if result.brightness < brightness_min:
         tips.append("Image is too dark: add front lighting or increase exposure slightly.")
@@ -36,18 +44,9 @@ def build_suggestions(result: AnalysisResult, thresholds: dict) -> list[str]:
     if result.blur_score < blur_min:
         tips.append("Photo appears blurry: steady the phone/camera and refocus before capture.")
 
-    if result.noise_score > noise_max:
-        tips.append("Visible grain/noise: use brighter light and lower ISO if possible.")
-
-    if result.width < min_width or result.height < min_height:
-        tips.append("Resolution is low: capture at a higher camera resolution for better quality.")
-
-    if result.face_count == 0:
+    if result.primary_face_box is None:
         tips.append("No clear face found: keep your face visible and avoid heavy backlighting.")
     else:
-        if result.face_count > 1:
-            tips.append("Multiple faces detected: move closer or switch to portrait framing for one subject.")
-
         if result.primary_face_area_ratio < face_area_ratio_min:
             tips.append("Face appears too small: move closer or crop tighter around the subject.")
 
@@ -63,20 +62,25 @@ def build_suggestions(result: AnalysisResult, thresholds: dict) -> list[str]:
     return tips
 
 
-def calculate_quality_score(result: AnalysisResult, thresholds: dict) -> int:
-    """Return a simple weighted quality score from 0 to 100."""
+def calculate_quality_score(result: AnalysisResult, thresholds: dict) -> float:
+    """Return a weighted quality score from 0.00 to 100.00."""
+    brightness_fail_min = thresholds.get("brightness_fail_min", 25)
+    brightness_warn_min = thresholds.get("brightness_warn_min", 50)
     brightness_min = thresholds.get("brightness_min", 80)
     brightness_max = thresholds.get("brightness_max", 190)
     contrast_min = thresholds.get("contrast_min", 35)
     blur_min = thresholds.get("blur_min", 120)
-    noise_max = thresholds.get("noise_max", 12)
-    min_width = thresholds.get("min_width", 1080)
-    min_height = thresholds.get("min_height", 1080)
     face_area_ratio_min = thresholds.get("face_area_ratio_min", 0.08)
     face_center_offset_max = thresholds.get("face_center_offset_max", 0.22)
     face_sharpness_min = thresholds.get("face_sharpness_min", 180)
 
+    if result.brightness < brightness_fail_min:
+        return 0.0
+
     score = 100.0
+
+    if result.brightness < brightness_warn_min:
+        score -= min(22.0, (brightness_warn_min - result.brightness) * 0.88)
 
     if result.brightness < brightness_min:
         score -= min(20.0, (brightness_min - result.brightness) * 0.35)
@@ -89,18 +93,9 @@ def calculate_quality_score(result: AnalysisResult, thresholds: dict) -> int:
     if result.blur_score < blur_min:
         score -= min(30.0, (blur_min - result.blur_score) * 0.08)
 
-    if result.noise_score > noise_max:
-        score -= min(15.0, (result.noise_score - noise_max) * 1.5)
-
-    if result.width < min_width or result.height < min_height:
-        score -= 10.0
-
-    if result.face_count == 0:
+    if result.primary_face_box is None:
         score -= 20.0
     else:
-        if result.face_count > 1:
-            score -= 5.0
-
         if result.primary_face_area_ratio < face_area_ratio_min:
             score -= min(12.0, (face_area_ratio_min - result.primary_face_area_ratio) * 120.0)
 
@@ -110,4 +105,4 @@ def calculate_quality_score(result: AnalysisResult, thresholds: dict) -> int:
         if result.face_sharpness < face_sharpness_min:
             score -= min(15.0, (face_sharpness_min - result.face_sharpness) * 0.08)
 
-    return int(max(0.0, min(100.0, round(score))))
+    return round(max(0.0, min(100.0, score)), 2)
