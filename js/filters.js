@@ -211,6 +211,49 @@ function drawFilterOverlay(ctx, box) {
   ctx.restore();
 }
 
+function drawNoseAlignmentGuide(ctx, box) {
+  const centerX = faceOverlay.width * 0.5;
+  const centerY = faceOverlay.height * 0.5;
+  const guideSize = Math.max(18, Math.min(faceOverlay.width, faceOverlay.height) * 0.08);
+  const half = guideSize * 0.5;
+
+  let noseX = box.x + (box.width * 0.5);
+  let noseY = box.y + (box.height * 0.56);
+  if (detectedLandmarks) {
+    const noseTip = getLandmarkCoordinate(detectedLandmarks, 1, box, faceOverlay.width, faceOverlay.height);
+    if (noseTip) {
+      noseX = noseTip.x;
+      noseY = noseTip.y;
+    }
+  }
+
+  const dx = noseX - centerX;
+  const dy = noseY - centerY;
+  const distance = Math.hypot(dx, dy);
+  noseAlignmentReady = distance <= (guideSize * 0.28);
+
+  const centerColor = noseAlignmentReady ? "rgba(34, 138, 88, 0.95)" : "rgba(185, 42, 42, 0.95)";
+  const noseColor = noseAlignmentReady ? "rgba(34, 138, 88, 0.95)" : "rgba(239, 172, 39, 0.96)";
+
+  ctx.save();
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = centerColor;
+  ctx.fillStyle = "rgba(185, 42, 42, 0.14)";
+  ctx.strokeRect(centerX - half, centerY - half, guideSize, guideSize);
+
+  ctx.beginPath();
+  ctx.moveTo(centerX - (half * 0.55), centerY);
+  ctx.lineTo(centerX + (half * 0.55), centerY);
+  ctx.moveTo(centerX, centerY - (half * 0.55));
+  ctx.lineTo(centerX, centerY + (half * 0.55));
+  ctx.stroke();
+
+  ctx.strokeStyle = noseColor;
+  ctx.fillStyle = noseAlignmentReady ? "rgba(34, 138, 88, 0.12)" : "rgba(239, 172, 39, 0.14)";
+  ctx.strokeRect(noseX - half, noseY - half, guideSize, guideSize);
+  ctx.restore();
+}
+
 // ---------------------------------------------------------------------------
 // Composite overlay box (face shape + filter on top)
 // ---------------------------------------------------------------------------
@@ -220,7 +263,13 @@ function drawOverlayBox(box) {
   if (!ctx) return;
 
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
+  drawNoseAlignmentGuide(ctx, box);
   drawDynamicFaceBox(ctx, box);
+  drawFilterOverlay(ctx, box);
+}
+
+function drawAccessoryOnlyOverlay(ctx, box) {
+  if (!ctx || !box) return;
   drawFilterOverlay(ctx, box);
 }
 
