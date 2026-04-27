@@ -432,6 +432,74 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Capture trend panel */
+.capture-trend-panel {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(26, 27, 29, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.trend-heading {
+  margin: 0 0 10px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: rgba(26, 27, 29, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.capture-trend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trend-entry {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  font-size: 0.88rem;
+}
+
+.trend-when {
+  grid-column: 1;
+  grid-row: 1;
+  font-weight: 600;
+  color: rgba(26, 27, 29, 0.55);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  align-self: center;
+}
+
+.trend-score {
+  grid-column: 2;
+  grid-row: 1;
+  font-weight: 700;
+}
+
+.trend-score em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.trend-weak {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 0.78rem;
+  color: rgba(26, 27, 29, 0.55);
+  line-height: 1.35;
+}
+
 @media (max-width: 980px) {
   .camera-card,
   .upload-card,
