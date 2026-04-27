@@ -19,6 +19,100 @@ function resetTrackingVisualState() {
   targetTrackedBox    = null;
   renderedTrackedBox  = null;
   missedTrackingFrames = 0;
+  noseAlignmentReady  = false;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+}
+
+function distance2d(a, b) {
+  if (!a || !b) return 0;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function midpoint(a, b) {
+  if (!a || !b) return null;
+  return { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+}
+
+function symmetryScore(left, right, centerX, faceWidthNorm) {
+  if (!left || !right || !Number.isFinite(centerX) || faceWidthNorm <= 0) return 0;
+  const leftDist = Math.abs(centerX - left.x);
+  const rightDist = Math.abs(right.x - centerX);
+  const mirrorDelta = Math.abs(leftDist - rightDist) / faceWidthNorm;
+  const heightDelta = Math.abs(left.y - right.y) / faceWidthNorm;
+  return clampPercent(100 - ((mirrorDelta * 220) + (heightDelta * 120)));
+}
+
+function rangeSizeScore(value, minIdeal, maxIdeal) {
+  if (!Number.isFinite(value)) return 0;
+  if (value >= minIdeal && value <= maxIdeal) return 100;
+  const gap = value < minIdeal ? (minIdeal - value) : (value - maxIdeal);
+  const window = Math.max(0.0001, maxIdeal - minIdeal);
+  return clampPercent(100 - ((gap / window) * 130));
+}
+
+function computeLandmarkFeatureMetrics(landmarks) {
+  if (!landmarks || landmarks.length < 455) return null;
+
+  const jawLeft = landmarks[234];
+  const jawRight = landmarks[454];
+  const forehead = landmarks[10];
+  const chin = landmarks[152];
+  const noseTip = landmarks[1];
+  const lowerLipCenter = landmarks[17];
+  if (!jawLeft || !jawRight || !forehead || !chin || !noseTip || !lowerLipCenter) return null;
+
+  const faceWidth = Math.max(0.0001, Math.abs(jawRight.x - jawLeft.x));
+  const faceHeight = Math.max(0.0001, Math.abs(chin.y - forehead.y));
+  const centerX = (jawLeft.x + jawRight.x) * 0.5;
+
+  const browLeftMid = midpoint(landmarks[70], landmarks[105]);
+  const browRightMid = midpoint(landmarks[336], landmarks[334]);
+  const eyeLeftInner = landmarks[133];
+  const eyeLeftOuter = landmarks[33];
+  const eyeRightInner = landmarks[362];
+  const eyeRightOuter = landmarks[263];
+  const mouthLeft = landmarks[61];
+  const mouthRight = landmarks[291];
+  const noseLeft = landmarks[129];
+  const noseRight = landmarks[358];
+  const noseBridge = landmarks[6];
+  const chinLeft = landmarks[172];
+  const chinRight = landmarks[397];
+  const lowerFaceLeft = landmarks[149];
+  const lowerFaceRight = landmarks[378];
+
+  const browSymmetry = symmetryScore(browLeftMid, browRightMid, centerX, faceWidth);
+  const browSize = rangeSizeScore((distance2d(landmarks[70], landmarks[105]) + distance2d(landmarks[336], landmarks[334])) / (2 * faceWidth), 0.08, 0.2);
+
+  const eyeLeftSpan = distance2d(eyeLeftOuter, eyeLeftInner);
+  const eyeRightSpan = distance2d(eyeRightOuter, eyeRightInner);
+  const eyeSymmetry = clampPercent((symmetryScore(eyeLeftOuter, eyeRightOuter, centerX, faceWidth) * 0.6) + (100 - (Math.abs(eyeLeftSpan - eyeRightSpan) / faceWidth) * 220) * 0.4);
+  const eyeSize = rangeSizeScore(((eyeLeftSpan + eyeRightSpan) * 0.5) / faceWidth, 0.12, 0.3);
+
+  const noseSymmetry = clampPercent(100 - (Math.abs(noseTip.x - centerX) / faceWidth) * 300);
+  const noseSize = rangeSizeScore(((distance2d(noseLeft, noseRight) / faceWidth) + (distance2d(noseBridge, landmarks[2]) / faceHeight)) * 0.5, 0.1, 0.28);
+
+  const mouthSymmetry = symmetryScore(mouthLeft, mouthRight, centerX, faceWidth);
+  const mouthSize = rangeSizeScore(distance2d(mouthLeft, mouthRight) / faceWidth, 0.24, 0.52);
+
+  const chinSymmetry = symmetryScore(lowerFaceLeft, lowerFaceRight, centerX, faceWidth);
+  const chinSize = rangeSizeScore(((distance2d(chinLeft, chinRight) / faceWidth) + (distance2d(chin, lowerLipCenter) / faceHeight)) * 0.5, 0.12, 0.35);
+
+  return {
+    eyebrow_symmetry_score: Number(browSymmetry.toFixed(2)),
+    eyebrow_size_score: Number(browSize.toFixed(2)),
+    eye_symmetry_score: Number(eyeSymmetry.toFixed(2)),
+    eye_size_score: Number(eyeSize.toFixed(2)),
+    nose_symmetry_score: Number(noseSymmetry.toFixed(2)),
+    nose_size_score: Number(noseSize.toFixed(2)),
+    mouth_symmetry_score: Number(mouthSymmetry.toFixed(2)),
+    mouth_size_score: Number(mouthSize.toFixed(2)),
+    chin_symmetry_score: Number(chinSymmetry.toFixed(2)),
+    chin_size_score: Number(chinSize.toFixed(2)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,12 +434,14 @@ async function initializeFaceMesh() {
 function onFaceMeshResults(results) {
   if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
     detectedLandmarks = null;
+    liveFeatureMetrics = null;
     return;
   }
 
   const landmarks  = results.multiFaceLandmarks[0];
   detectedLandmarks = landmarks.map((l) => ({ x: l.x, y: l.y, z: l.z }));
   detectedFaceShape = classifyFaceShape(detectedLandmarks);
+  liveFeatureMetrics = computeLandmarkFeatureMetrics(detectedLandmarks);
 }
 
 // ---------------------------------------------------------------------------
