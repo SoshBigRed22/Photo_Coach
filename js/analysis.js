@@ -133,6 +133,13 @@ function scoreBand(score) {
   return "Needs Work";
 }
 
+function bandColor(score) {
+  const normalized = Number.isFinite(Number(score)) ? Number(score) : 0;
+  if (normalized >= 85) return "rgba(19, 111, 99, 0.9)";
+  if (normalized >= 70) return "rgba(180, 110, 20, 0.9)";
+  return "rgba(154, 31, 31, 0.9)";
+}
+
 function buildPriorityTips(metrics) {
   const ranked = Object.entries(metrics)
     .filter(([key, value]) => PERCENT_METRIC_KEYS.has(key) && key !== "facial_hair_presence" && Number.isFinite(Number(value)))
@@ -140,11 +147,16 @@ function buildPriorityTips(metrics) {
     .sort((a, b) => a.score - b.score)
     .slice(0, 3);
 
-  return ranked.map((item) => {
-    const label = METRIC_LABELS[item.key] || item.key;
-    const action = METRIC_ACTION_TIPS[item.key] || "Retake with steadier alignment and lighting.";
-    return `Priority fix — ${label} (${item.score.toFixed(2)}%): ${action}`;
-  });
+  // Suppress priority tips when all scoreable terms are excellent
+  if (ranked.every((item) => item.score >= 85)) return [];
+
+  return ranked
+    .filter((item) => item.score < 85)
+    .map((item) => {
+      const label = METRIC_LABELS[item.key] || item.key;
+      const action = METRIC_ACTION_TIPS[item.key] || "Retake with steadier alignment and lighting.";
+      return `Priority fix — ${label} (${item.score.toFixed(2)}%): ${action}`;
+    });
 }
 
 function renderTips(tips) {
@@ -164,13 +176,76 @@ function renderMetrics(metrics) {
     const dd         = document.createElement("dd");
     if (PERCENT_METRIC_KEYS.has(key) && Number.isFinite(Number(value))) {
       const normalized = Number(value);
-      dd.textContent = `${normalized.toFixed(2)}% (${scoreBand(normalized)})`;
+      const band       = scoreBand(normalized);
+      dd.textContent   = `${normalized.toFixed(2)}%`;
+      const badge      = document.createElement("span");
+      badge.textContent = ` ${band}`;
+      badge.style.cssText = `font-size:0.78rem;font-weight:700;color:${bandColor(normalized)};margin-left:4px;`;
+      dd.appendChild(badge);
     } else {
       dd.textContent = String(value);
     }
     metricsGrid.appendChild(dt);
     metricsGrid.appendChild(dd);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Capture trend (last 3 captures, stored in localStorage)
+// ---------------------------------------------------------------------------
+const CAPTURE_TREND_KEY = "photoCoachCaptureTrendV1";
+
+function loadCaptureTrend() {
+  try {
+    return JSON.parse(localStorage.getItem(CAPTURE_TREND_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function addCaptureToTrend(score, metrics) {
+  const trend = loadCaptureTrend();
+  trend.push({
+    ts: Date.now(),
+    score: round2(score),
+    top: Object.entries(metrics)
+      .filter(([k, v]) => PERCENT_METRIC_KEYS.has(k) && k !== "facial_hair_presence" && Number.isFinite(Number(v)))
+      .sort((a, b) => Number(a[1]) - Number(b[1]))
+      .slice(0, 3)
+      .map(([k, v]) => ({ key: k, score: round2(v) })),
+  });
+  if (trend.length > 3) trend.splice(0, trend.length - 3);
+  try { localStorage.setItem(CAPTURE_TREND_KEY, JSON.stringify(trend)); } catch { /* storage full */ }
+  renderCaptureTrend();
+}
+
+function round2(v) { return Math.round(Number(v) * 100) / 100; }
+
+function renderCaptureTrend() {
+  const panel = document.getElementById("captureTrendPanel");
+  const list  = document.getElementById("captureTrendList");
+  if (!panel || !list) return;
+
+  const trend = loadCaptureTrend();
+  if (!trend.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  list.innerHTML = "";
+
+  trend.slice().reverse().forEach((entry, i) => {
+    const li    = document.createElement("li");
+    li.className = "trend-entry";
+    const when  = i === 0 ? "Latest" : `${i + 1} capture${i > 0 ? "s" : ""} ago`;
+    const band  = scoreBand(entry.score);
+    const color = bandColor(entry.score);
+    const weakList = entry.top.length
+      ? entry.top.map((t) => `${METRIC_LABELS[t.key] || t.key}: ${t.score.toFixed(2)}%`).join(" · ")
+      : "All terms Excellent";
+    li.innerHTML =
+      `<span class="trend-when">${when}</span>` +
+      `<span class="trend-score" style="color:${color}">${entry.score.toFixed(2)}% <em>${band}</em></span>` +
+      `<span class="trend-weak">${weakList}</span>`;
+    list.appendChild(li);
+  });
 }
 
 function applyAnalysisPayload(payload, localAssessment = null, context = selectedPhotoContext) {
@@ -184,6 +259,7 @@ function applyAnalysisPayload(payload, localAssessment = null, context = selecte
   renderTips([...priorityTips, ...(payload.tips || [])]);
   renderMetrics(mergedMetrics);
   renderPiercingFitAssessment(localAssessment);
+  addCaptureToTrend(payload.score, mergedMetrics);
 }
 
 // ---------------------------------------------------------------------------
