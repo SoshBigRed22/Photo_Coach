@@ -10,8 +10,9 @@
 // Score helpers
 // ---------------------------------------------------------------------------
 function scoreClass(score) {
-  if (score >= 80) return "good";
-  if (score >= 60) return "mid";
+  const normalized = Number.isFinite(Number(score)) ? Number(score) : 0;
+  if (normalized >= 80) return "good";
+  if (normalized >= 60) return "mid";
   return "low";
 }
 
@@ -34,6 +35,7 @@ function buildPhotoContext(source) {
     faceShape:       detectedLandmarks ? detectedFaceShape : null,
     faceDetected:    Boolean(detectedLandmarks || activeBox),
     faceWidthRatio:  activeBox && overlayWidth ? activeBox.width / overlayWidth : null,
+    featureMetrics:  liveFeatureMetrics ? { ...liveFeatureMetrics } : null,
     inspiration,
   };
 }
@@ -55,7 +57,8 @@ function drawVideoCoverFrame(ctx, source, sourceWidth, sourceHeight, destWidth, 
 // Results rendering
 // ---------------------------------------------------------------------------
 function setScore(score) {
-  scorePill.textContent = `Score: ${score}/100`;
+  const normalizedScore = Number.isFinite(Number(score)) ? Number(score) : 0;
+  scorePill.textContent = `Score: ${normalizedScore.toFixed(2)}%`;
   const cls             = scoreClass(score);
   scorePill.style.background = cls === "good"
     ? "rgba(19, 111, 99, 0.14)"
@@ -78,30 +81,64 @@ function renderMetrics(metrics) {
     brightness:          "Brightness",
     contrast:            "Contrast",
     blur_score:          "Blur",
-    noise_score:         "Noise",
-    width:               "Width",
     height:              "Height",
-    face_count:          "Faces",
-    face_area_ratio:     "Face area",
-    face_center_offset:  "Face offset",
-    face_sharpness:      "Face sharpness",
+    face_area_ratio:     "Face area (how much of frame your face fills)",
+    face_center_offset:  "Face offset (distance from center target)",
+    face_sharpness:      "Face sharpness (detail clarity on the face)",
+    facial_hair_presence: "Facial hair presence",
+    eyebrow_symmetry_score: "Eyebrow symmetry",
+    eyebrow_size_score:  "Eyebrow size balance",
+    eye_symmetry_score:  "Eye symmetry",
+    eye_size_score:      "Eye size balance",
+    nose_symmetry_score: "Nose symmetry",
+    nose_size_score:     "Nose size balance",
+    mouth_symmetry_score: "Mouth symmetry",
+    mouth_size_score:    "Mouth size balance",
+    chin_symmetry_score: "Chin symmetry",
+    chin_size_score:     "Chin size balance",
   };
+  const featurePercentKeys = new Set([
+    "eyebrow_symmetry_score",
+    "eyebrow_size_score",
+    "eye_symmetry_score",
+    "eye_size_score",
+    "nose_symmetry_score",
+    "nose_size_score",
+    "mouth_symmetry_score",
+    "mouth_size_score",
+    "chin_symmetry_score",
+    "chin_size_score",
+    "facial_hair_presence",
+  ]);
 
   metricsGrid.innerHTML = "";
   for (const [key, value] of Object.entries(metrics)) {
     const dt         = document.createElement("dt");
     dt.textContent   = labels[key] || key;
     const dd         = document.createElement("dd");
-    dd.textContent   = String(value);
+    if (key === "face_area_ratio" && Number.isFinite(Number(value))) {
+      dd.textContent = `${(Number(value) * 100).toFixed(2)}%`;
+    } else if (key === "face_center_offset" && Number.isFinite(Number(value))) {
+      dd.textContent = `${(Number(value) * 100).toFixed(2)}%`;
+    } else if (featurePercentKeys.has(key) && Number.isFinite(Number(value))) {
+      dd.textContent = `${Number(value).toFixed(2)}%`;
+    } else {
+      dd.textContent = String(value);
+    }
     metricsGrid.appendChild(dt);
     metricsGrid.appendChild(dd);
   }
 }
 
-function applyAnalysisPayload(payload, localAssessment = null) {
+function applyAnalysisPayload(payload, localAssessment = null, context = selectedPhotoContext) {
+  const contextFeatureMetrics = context?.featureMetrics || null;
+  const mergedMetrics = contextFeatureMetrics
+    ? { ...(payload.metrics || {}), ...contextFeatureMetrics }
+    : (payload.metrics || {});
+
   setScore(payload.score);
   renderTips(payload.tips || []);
-  renderMetrics(payload.metrics || {});
+  renderMetrics(mergedMetrics);
   renderPiercingFitAssessment(localAssessment);
 }
 
@@ -250,7 +287,7 @@ async function analyzeBlob(blob, context = selectedPhotoContext) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Analyze request failed.");
 
-    applyAnalysisPayload(payload, assessPiercingFit(context));
+    applyAnalysisPayload(payload, assessPiercingFit(context), context);
   } catch (error) {
     alert(error.message);
   } finally {
