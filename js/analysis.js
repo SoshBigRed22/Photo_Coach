@@ -300,7 +300,12 @@ function renderPiercingFitAssessment(assessment) {
 function assessPiercingFit(context) {
   if (!context || !context.filter || context.filter === "none") return null;
 
-  const guide   = PIERCING_STYLE_GUIDE[context.filter];
+  const guide   = PIERCING_STYLE_GUIDE[context.filter] || {
+    preferredShapes: ["oval", "heart", "square", "diamond", "round"],
+    flexibleShapes:  [],
+    alternatives:    ["nose-stud-left", "septum"],
+    note: "This custom overlay fit score is estimated from placement, size, and framing.",
+  };
   const label   = filterLabel(context.filter);
   const details = [];
   let   score   = 72;
