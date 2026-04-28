@@ -69,6 +69,7 @@ function addInspirationEntry(rawUrl, note = "") {
   const styleTokens = parseStyleTokens(combined);
   const entry       = {
     id:               `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceType:       "pin-url",
     url:              normalizedUrl,
     note:             note.trim(),
     styleTokens,
@@ -86,6 +87,38 @@ function addInspirationEntry(rawUrl, note = "") {
 
   // Kick off background-removal fetch (fire-and-forget; errors stored in entry)
   processPinImage(entry.id, normalizedUrl);
+}
+
+async function addInspirationImageEntry(file, note = "") {
+  if (!file || !file.type || !file.type.startsWith("image/")) {
+    throw new Error("Please choose a valid image file.");
+  }
+
+  const safeName = String(file.name || "uploaded-image").trim();
+  const combined = `${safeName} ${note}`;
+  const styleTokens = parseStyleTokens(combined);
+  const entry = {
+    id:               `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceType:       "upload",
+    url:              `upload://${safeName}`,
+    note:             note.trim() || safeName,
+    styleTokens,
+    addedAt:          Date.now(),
+    placement:        inferPlacement(styleTokens),
+    processedImage:   null,
+    processingStatus: "loading",
+    processingError:  null,
+  };
+
+  inspirationEntries = [entry, ...inspirationEntries].slice(0, 12);
+  persistInspirationEntries();
+  renderInspirationEntries();
+  selectedPhotoContext = buildPhotoContext(selectedPhotoContext?.source || "empty");
+
+  if (overlayUploadStatus) {
+    overlayUploadStatus.textContent = "Processing uploaded image...";
+  }
+  await processUploadedImage(entry.id, file);
 }
 
 function removeInspirationEntry(id) {
@@ -133,11 +166,51 @@ async function processPinImage(entryId, url) {
   }
 }
 
+async function processUploadedImage(entryId, file) {
+  try {
+    const formData = new FormData();
+    formData.append("image", file, file.name || "overlay-image.png");
+
+    const resp = await fetch(`${API_BASE}/api/process-overlay-upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+
+    const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+    if (idx !== -1) {
+      inspirationEntries[idx].processedImage = data.image;
+      inspirationEntries[idx].processingStatus = "done";
+      inspirationEntries[idx].processingError = null;
+    }
+    if (overlayUploadStatus) {
+      overlayUploadStatus.textContent = "Uploaded image is ready. Click Apply Overlay on the entry.";
+    }
+  } catch (err) {
+    const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+    if (idx !== -1) {
+      inspirationEntries[idx].processingStatus = "failed";
+      inspirationEntries[idx].processingError = err.message || "Processing failed.";
+    }
+    if (overlayUploadStatus) {
+      overlayUploadStatus.textContent = "Upload processing failed. Try a cleaner, higher-contrast product image.";
+    }
+  } finally {
+    persistInspirationEntries();
+    renderInspirationEntries();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Apply a processed pin as the live overlay
 // ---------------------------------------------------------------------------
-function applyInspirationOverlay(entry) {
-  if (!entry.processedImage) return;
+function applyInspirationOverlay(entryOrId) {
+  const entry = typeof entryOrId === "string"
+    ? inspirationEntries.find((item) => item && item.id === entryOrId)
+    : entryOrId;
+  if (!entry || !entry.processedImage) return;
+
   const img  = new Image();
   img.onload = () => {
     customOverlayImage     = img;
@@ -174,7 +247,10 @@ function loadInspirationEntries() {
           : parseStyleTokens(`${entry.url} ${entry.note || ""}`);
         return {
           id:               String(entry.id || `pin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
-          url:              normalizePinterestUrl(entry.url) || entry.url,
+          sourceType:       entry.sourceType === "upload" ? "upload" : "pin-url",
+          url:              entry.sourceType === "upload"
+            ? String(entry.url || "")
+            : (normalizePinterestUrl(entry.url) || entry.url),
           note:             typeof entry.note === "string" ? entry.note : "",
           styleTokens,
           addedAt:          Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now(),
@@ -184,7 +260,7 @@ function loadInspirationEntries() {
           processingError:  entry.processingError || null,
         };
       })
-      .filter((entry) => entry.url && entry.url.includes("pinterest"))
+      .filter((entry) => entry && typeof entry.id === "string")
       .slice(0, 12);
   } catch {
     inspirationEntries = [];
@@ -246,7 +322,7 @@ function renderInspirationEntries() {
     { value: "ear-right",    label: "Right Ear" },
   ];
 
-  for (const entry of inspirationEntries) {
+  for (const entry of inspirationEntries.filter(Boolean)) {
     const li      = document.createElement("li");
     li.className  = "inspiration-entry-card";
 
@@ -263,30 +339,32 @@ function renderInspirationEntries() {
     } else if (entry.processingStatus === "loading") {
       const loading     = document.createElement("span");
       loading.className = "inspiration-loading";
-      loading.textContent = "Processing…";
+      loading.textContent = "Processing...";
       thumbWrap.appendChild(loading);
     } else if (entry.processingStatus === "failed") {
       const fail     = document.createElement("span");
       fail.className = "inspiration-failed";
       fail.title     = entry.processingError || "Failed";
-      fail.textContent = "✗";
+      fail.textContent = "X";
       thumbWrap.appendChild(fail);
 
-      const retryBtn       = document.createElement("button");
-      retryBtn.type        = "button";
-      retryBtn.className   = "inspiration-retry-btn";
-      retryBtn.textContent = "Retry";
-      retryBtn.addEventListener("click", () => {
-        const idx = inspirationEntries.findIndex((e) => e.id === entry.id);
-        if (idx !== -1) {
-          inspirationEntries[idx].processingStatus = "loading";
-          inspirationEntries[idx].processingError  = null;
-          persistInspirationEntries();
-          renderInspirationEntries();
-          processPinImage(entry.id, entry.url);
-        }
-      });
-      thumbWrap.appendChild(retryBtn);
+      if (entry.sourceType !== "upload") {
+        const retryBtn       = document.createElement("button");
+        retryBtn.type        = "button";
+        retryBtn.className   = "inspiration-retry-btn";
+        retryBtn.textContent = "Retry";
+        retryBtn.addEventListener("click", () => {
+          const idx = inspirationEntries.findIndex((e) => e && e.id === entry.id);
+          if (idx !== -1) {
+            inspirationEntries[idx].processingStatus = "loading";
+            inspirationEntries[idx].processingError  = null;
+            persistInspirationEntries();
+            renderInspirationEntries();
+            processPinImage(entry.id, entry.url);
+          }
+        });
+        thumbWrap.appendChild(retryBtn);
+      }
     } else {
       const noImg     = document.createElement("span");
       noImg.className = "inspiration-no-image";
@@ -300,12 +378,19 @@ function renderInspirationEntries() {
     const infoDiv     = document.createElement("div");
     infoDiv.className = "inspiration-info";
 
-    const link         = document.createElement("a");
-    link.href          = entry.url;
-    link.target        = "_blank";
-    link.rel           = "noopener noreferrer";
-    link.textContent   = entry.note || entry.url;
-    infoDiv.appendChild(link);
+    if (entry.sourceType === "upload") {
+      const title = document.createElement("span");
+      title.className = "inspiration-upload-title";
+      title.textContent = entry.note || "Uploaded overlay image";
+      infoDiv.appendChild(title);
+    } else {
+      const link         = document.createElement("a");
+      link.href          = entry.url;
+      link.target        = "_blank";
+      link.rel           = "noopener noreferrer";
+      link.textContent   = entry.note || entry.url;
+      infoDiv.appendChild(link);
+    }
 
     // Placement selector
     const placementLabel     = document.createElement("label");
@@ -340,7 +425,7 @@ function renderInspirationEntries() {
       applyBtn.type        = "button";
       applyBtn.className   = "inspiration-apply-btn";
       applyBtn.textContent = "Apply Overlay";
-      applyBtn.addEventListener("click", () => applyInspirationOverlay(entry));
+      applyBtn.addEventListener("click", () => applyInspirationOverlay(entry.id));
       actionsDiv.appendChild(applyBtn);
     }
 
