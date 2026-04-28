@@ -90,6 +90,14 @@
             <input id="inspirationUrlInput" type="url" placeholder="https://www.pinterest.com/pin/..." autocomplete="off">
             <button id="addInspirationBtn" type="button">Add Pin</button>
           </div>
+          <div class="overlay-upload-row">
+            <label for="overlayImageInput" class="overlay-upload-label">
+              <input id="overlayImageInput" type="file" accept="image/*">
+              <span>Or choose a piercing image file</span>
+            </label>
+            <button id="addOverlayImageBtn" type="button">Add Image</button>
+          </div>
+          <span id="overlayUploadStatus" class="overlay-upload-status">Upload a piercing image to turn it into a transparent overlay.</span>
           <input id="inspirationNoteInput" type="text" placeholder="Optional note, e.g. minimalist silver stud">
           <div class="inspiration-meta-row">
             <span id="inspirationStatus">No inspiration pins added yet.</span>
