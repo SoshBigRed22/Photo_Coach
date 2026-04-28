@@ -405,6 +405,50 @@ def frame_probe(frame) -> dict:
     }
 
 
+def remove_background_to_data_url(img) -> str:
+    """Extract foreground with alpha and return a data:image/png;base64 URL."""
+    h, w = img.shape[:2]
+    max_dim = 600
+    if max(h, w) > max_dim:
+        scale_factor = max_dim / max(h, w)
+        img = cv2.resize(
+            img,
+            (int(w * scale_factor), int(h * scale_factor)),
+            interpolation=cv2.INTER_AREA,
+        )
+        h, w = img.shape[:2]
+
+    mask = np.zeros((h, w), np.uint8)
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
+
+    margin_x = max(1, int(w * 0.15))
+    margin_y = max(1, int(h * 0.15))
+    rect_w = max(1, w - 2 * margin_x)
+    rect_h = max(1, h - 2 * margin_y)
+    rect = (margin_x, margin_y, rect_w, rect_h)
+
+    cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+    fg_mask = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, light = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY)
+    fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(light))
+
+    fg_mask = cv2.GaussianBlur(fg_mask, (3, 3), 0)
+    _, fg_mask = cv2.threshold(fg_mask, 128, 255, cv2.THRESH_BINARY)
+
+    img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    img_rgba[:, :, 3] = fg_mask
+
+    ok, buf = cv2.imencode(".png", img_rgba)
+    if not ok:
+        raise RuntimeError("Failed to encode result image.")
+
+    b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
+
+
 def is_usable_probe(probe: dict) -> bool:
     # Heuristic: pure-black or near-static feeds are unusable for capture.
     return probe["mean"] > 8 and probe["variance"] > 25
@@ -871,53 +915,37 @@ def fetch_pin_image():
         if img is None:
             return jsonify({"error": "Could not decode image data."}), 400
 
-        # Downscale to max 600px on longest side for performance
-        h, w = img.shape[:2]
-        max_dim = 600
-        if max(h, w) > max_dim:
-            scale_factor = max_dim / max(h, w)
-            img = cv2.resize(
-                img,
-                (int(w * scale_factor), int(h * scale_factor)),
-                interpolation=cv2.INTER_AREA,
-            )
-            h, w = img.shape[:2]
-
-        # GrabCut background removal — assume subject is centered
-        mask = np.zeros((h, w), np.uint8)
-        bgd_model = np.zeros((1, 65), np.float64)
-        fgd_model = np.zeros((1, 65), np.float64)
-        margin_x = max(1, int(w * 0.15))
-        margin_y = max(1, int(h * 0.15))
-        rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
-        cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
-        fg_mask = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
-
-        # Also remove near-white pixels (common in product-photo backgrounds)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, light = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY)
-        fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(light))
-
-        # Smooth edges
-        fg_mask = cv2.GaussianBlur(fg_mask, (3, 3), 0)
-        _, fg_mask = cv2.threshold(fg_mask, 128, 255, cv2.THRESH_BINARY)
-
-        # Assemble RGBA image
-        img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-        img_rgba[:, :, 3] = fg_mask
-
-        # Encode as PNG
-        ok, buf = cv2.imencode(".png", img_rgba)
-        if not ok:
-            return jsonify({"error": "Failed to encode result image."}), 500
-
-        b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
-        return jsonify({"image": f"data:image/png;base64,{b64}", "sourceUrl": image_url})
+        return jsonify({"image": remove_background_to_data_url(img), "sourceUrl": image_url})
 
     except requests.RequestException as exc:
         return jsonify({"error": f"Failed to fetch image: {exc}"}), 500
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": f"Processing failed: {exc}"}), 500
+
+
+@app.post("/api/process-overlay-upload")
+def process_overlay_upload():
+    """Process an uploaded piercing image into a transparent PNG overlay."""
+    if "image" not in request.files:
+        return jsonify({"error": "Missing file field 'image'."}), 400
+
+    uploaded = request.files["image"]
+    if not uploaded.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    try:
+        encoded = uploaded.read()
+        if not encoded:
+            return jsonify({"error": "Empty image payload."}), 400
+
+        arr = np.frombuffer(encoded, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify({"error": "Could not decode uploaded image."}), 400
+
+        return jsonify({"image": remove_background_to_data_url(img), "source": "upload"})
+    except Exception as exc:  # pragma: no cover
+        return jsonify({"error": f"Upload processing failed: {exc}"}), 500
 
 
 if __name__ == "__main__":
