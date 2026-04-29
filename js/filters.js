@@ -277,9 +277,17 @@ function getPlacementAnchor(placement, box) {
 
 function drawCustomImageOverlay(ctx, box) {
   if (!customOverlayImage || !customOverlayImage.complete || customOverlayImage.naturalWidth === 0) return;
-  const anchor  = getPlacementAnchor(customOverlayPlacement || "septum", box);
-  const w       = box.width * 0.3 * selectedFilterScale;
-  const h       = w * (customOverlayImage.naturalHeight / customOverlayImage.naturalWidth);
+  const placement = customOverlayPlacement || "septum";
+  const anchor = getPlacementAnchor(placement, box);
+  const baseScale = placement === "septum"
+    ? 0.11
+    : placement === "nostril-left"
+      ? 0.08
+      : placement === "brow-left"
+        ? 0.16
+        : 0.18;
+  const w = box.width * baseScale * selectedFilterScale;
+  const h = w * (customOverlayImage.naturalHeight / customOverlayImage.naturalWidth);
   ctx.save();
   ctx.globalAlpha = 0.92;
   ctx.drawImage(customOverlayImage, anchor.x - w / 2, anchor.y - h / 2, w, h);
