@@ -407,46 +407,73 @@ def frame_probe(frame) -> dict:
 
 def remove_background_to_data_url(img) -> str:
     """Extract foreground with alpha and return a data:image/png;base64 URL."""
-    h, w = img.shape[:2]
-    max_dim = 600
-    if max(h, w) > max_dim:
-        scale_factor = max_dim / max(h, w)
-        img = cv2.resize(
-            img,
-            (int(w * scale_factor), int(h * scale_factor)),
-            interpolation=cv2.INTER_AREA,
-        )
+    try:
         h, w = img.shape[:2]
+        max_dim = 600
+        if max(h, w) > max_dim:
+            scale_factor = max_dim / max(h, w)
+            img = cv2.resize(
+                img,
+                (int(w * scale_factor), int(h * scale_factor)),
+                interpolation=cv2.INTER_AREA,
+            )
+            h, w = img.shape[:2]
 
-    mask = np.zeros((h, w), np.uint8)
-    bgd_model = np.zeros((1, 65), np.float64)
-    fgd_model = np.zeros((1, 65), np.float64)
+        mask = np.zeros((h, w), np.uint8)
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
 
-    margin_x = max(1, int(w * 0.15))
-    margin_y = max(1, int(h * 0.15))
-    rect_w = max(1, w - 2 * margin_x)
-    rect_h = max(1, h - 2 * margin_y)
-    rect = (margin_x, margin_y, rect_w, rect_h)
+        margin_x = max(1, int(w * 0.10))  # Use 10% margin for better detection
+        margin_y = max(1, int(h * 0.10))
+        rect_w = max(1, w - 2 * margin_x)
+        rect_h = max(1, h - 2 * margin_y)
+        rect = (margin_x, margin_y, rect_w, rect_h)
 
-    cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
-    fg_mask = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+        # Try GrabCut with error handling
+        grabcut_success = False
+        try:
+            cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+            fg_mask = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+            grabcut_success = True
+        except Exception as e:
+            print(f"[WARN] GrabCut failed (using full mask fallback): {e}")
+            fg_mask = np.full((h, w), 255, dtype=np.uint8)
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, light = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY)
-    fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(light))
+        # Remove near-white backgrounds
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, light = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY)
+        fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(light))
 
-    fg_mask = cv2.GaussianBlur(fg_mask, (3, 3), 0)
-    _, fg_mask = cv2.threshold(fg_mask, 128, 255, cv2.THRESH_BINARY)
+        # Check for mask collapse and recover if needed
+        keep_ratio = float(np.count_nonzero(fg_mask)) / float(max(1, fg_mask.size))
+        if keep_ratio < 0.015:
+            # Mask collapsed - add dark regions back
+            _, dark_regions = cv2.threshold(gray, 235, 255, cv2.THRESH_BINARY_INV)
+            fg_mask = cv2.max(fg_mask, dark_regions)
+            keep_ratio = float(np.count_nonzero(fg_mask)) / float(max(1, fg_mask.size))
+            if keep_ratio < 0.015:
+                # Still collapsed - use full mask
+                print(f"[WARN] Mask still collapsed ({keep_ratio:.4f}), using full mask")
+                fg_mask = np.full((h, w), 255, dtype=np.uint8)
 
-    img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-    img_rgba[:, :, 3] = fg_mask
+        # Smooth and finalize mask
+        fg_mask = cv2.GaussianBlur(fg_mask, (3, 3), 0)
+        _, fg_mask = cv2.threshold(fg_mask, 128, 255, cv2.THRESH_BINARY)
 
-    ok, buf = cv2.imencode(".png", img_rgba)
-    if not ok:
-        raise RuntimeError("Failed to encode result image.")
+        # Create RGBA image
+        img_rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+        img_rgba[:, :, 3] = fg_mask
 
-    b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
+        # Encode to PNG
+        ok, buf = cv2.imencode(".png", img_rgba)
+        if not ok:
+            raise RuntimeError("Failed to encode PNG - cv2.imencode failed")
+
+        b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+        return f"data:image/png;base64,{b64}"
+
+    except Exception as e:
+        raise RuntimeError(f"Background removal failed: {str(e)[:100]}")
 
 
 def is_usable_probe(probe: dict) -> bool:
