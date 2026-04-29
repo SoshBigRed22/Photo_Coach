@@ -336,14 +336,32 @@ function drawNoseAlignmentGuide(ctx, box) {
 // Composite overlay box (face shape + filter on top)
 // ---------------------------------------------------------------------------
 function drawOverlayBox(box) {
-  if (!faceOverlay) return;
+  if (!faceOverlay) {
+    console.warn("[FILTERS] faceOverlay not found");
+    return;
+  }
   const ctx = faceOverlay.getContext("2d");
-  if (!ctx) return;
+  if (!ctx) {
+    console.warn("[FILTERS] canvas context not obtainable");
+    return;
+  }
 
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
-  drawNoseAlignmentGuide(ctx, box);
-  drawDynamicFaceBox(ctx, box);
-  drawFilterOverlay(ctx, box);
+  try {
+    drawNoseAlignmentGuide(ctx, box);
+  } catch (e) {
+    console.error("[FILTERS] Error in drawNoseAlignmentGuide:", e);
+  }
+  try {
+    drawDynamicFaceBox(ctx, box);
+  } catch (e) {
+    console.error("[FILTERS] Error in drawDynamicFaceBox:", e);
+  }
+  try {
+    drawFilterOverlay(ctx, box);
+  } catch (e) {
+    console.error("[FILTERS] Error in drawFilterOverlay:", e);
+  }
 }
 
 function drawAccessoryOnlyOverlay(ctx, box) {
