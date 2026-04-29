@@ -119,6 +119,11 @@ async function addInspirationImageEntry(file, note = "") {
     overlayUploadStatus.textContent = "Processing uploaded image...";
   }
   await processUploadedImage(entry.id, file);
+
+  const readyEntry = inspirationEntries.find((e) => e && e.id === entry.id && e.processedImage);
+  if (readyEntry) {
+    applyInspirationOverlay(readyEntry);
+  }
 }
 
 function removeInspirationEntry(id) {
@@ -207,20 +212,44 @@ async function processUploadedImage(entryId, file) {
         overlayUploadStatus.textContent = "Server processing failed; local fallback succeeded. Click Apply Overlay on the entry.";
       }
     } catch (fallbackErr) {
-      const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
-      if (idx !== -1) {
-        inspirationEntries[idx].processingStatus = "failed";
-        inspirationEntries[idx].processingError = err.message || "Processing failed.";
+      // Final fallback: keep the original uploaded image as an overlay source.
+      try {
+        const rawImage = await readFileAsDataUrl(file);
+        const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+        if (idx !== -1) {
+          inspirationEntries[idx].processedImage = rawImage;
+          inspirationEntries[idx].processingStatus = "done";
+          inspirationEntries[idx].processingError = null;
+        }
+        if (overlayUploadStatus) {
+          overlayUploadStatus.textContent = "Server cleanup failed; using original uploaded image as overlay.";
+        }
+      } catch (rawErr) {
+        const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+        if (idx !== -1) {
+          inspirationEntries[idx].processingStatus = "failed";
+          inspirationEntries[idx].processingError = err.message || "Processing failed.";
+        }
+        if (overlayUploadStatus) {
+          overlayUploadStatus.textContent = `Upload processing failed: ${err.message || "unknown error"}`;
+        }
+        console.error("[Inspiration] Local fallback failed:", fallbackErr);
+        console.error("[Inspiration] Raw-image fallback failed:", rawErr);
       }
-      if (overlayUploadStatus) {
-        overlayUploadStatus.textContent = `Upload processing failed: ${err.message || "unknown error"}`;
-      }
-      console.error("[Inspiration] Local fallback failed:", fallbackErr);
     }
   } finally {
     persistInspirationEntries();
     renderInspirationEntries();
   }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read uploaded file."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
 }
 
 function createOverlayDataUrlFromFile(file) {
