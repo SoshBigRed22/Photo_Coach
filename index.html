@@ -127,6 +127,22 @@
     </section>
   </main>
 
+  <!-- Crop Modal -->
+  <div id="cropModal" class="crop-modal" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Select piercing region">
+    <div class="crop-modal-inner">
+      <h3 class="crop-modal-title">Select the Piercing</h3>
+      <p class="crop-modal-hint">Drag a box around just the jewelry, then click <strong>Confirm Crop</strong>. Or click <strong>Use Full Image</strong> to skip.</p>
+      <div class="crop-canvas-wrap">
+        <canvas id="cropCanvas"></canvas>
+      </div>
+      <div class="crop-modal-actions">
+        <button id="cropConfirmBtn" type="button" onclick="confirmCrop()">Confirm Crop</button>
+        <button id="cropSkipBtn" type="button" onclick="skipCrop()">Use Full Image</button>
+        <button id="cropCancelBtn" type="button" onclick="closeCropModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MediaPipe Face Mesh for landmark detection -->
   <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
