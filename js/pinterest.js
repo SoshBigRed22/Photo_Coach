@@ -175,7 +175,13 @@ async function processUploadedImage(entryId, file) {
       method: "POST",
       body: formData,
     });
-    const data = await resp.json();
+    const raw = await resp.text();
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { error: raw || `HTTP ${resp.status}` };
+    }
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
 
     const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
@@ -188,18 +194,81 @@ async function processUploadedImage(entryId, file) {
       overlayUploadStatus.textContent = "Uploaded image is ready. Click Apply Overlay on the entry.";
     }
   } catch (err) {
-    const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
-    if (idx !== -1) {
-      inspirationEntries[idx].processingStatus = "failed";
-      inspirationEntries[idx].processingError = err.message || "Processing failed.";
-    }
-    if (overlayUploadStatus) {
-      overlayUploadStatus.textContent = "Upload processing failed. Try a cleaner, higher-contrast product image.";
+    // Fallback: if backend processing fails, build a transparent overlay client-side.
+    try {
+      const fallbackImage = await createOverlayDataUrlFromFile(file);
+      const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+      if (idx !== -1) {
+        inspirationEntries[idx].processedImage = fallbackImage;
+        inspirationEntries[idx].processingStatus = "done";
+        inspirationEntries[idx].processingError = null;
+      }
+      if (overlayUploadStatus) {
+        overlayUploadStatus.textContent = "Server processing failed; local fallback succeeded. Click Apply Overlay on the entry.";
+      }
+    } catch (fallbackErr) {
+      const idx = inspirationEntries.findIndex((e) => e && e.id === entryId);
+      if (idx !== -1) {
+        inspirationEntries[idx].processingStatus = "failed";
+        inspirationEntries[idx].processingError = err.message || "Processing failed.";
+      }
+      if (overlayUploadStatus) {
+        overlayUploadStatus.textContent = `Upload processing failed: ${err.message || "unknown error"}`;
+      }
+      console.error("[Inspiration] Local fallback failed:", fallbackErr);
     }
   } finally {
     persistInspirationEntries();
     renderInspirationEntries();
   }
+}
+
+function createOverlayDataUrlFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the uploaded file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not decode uploaded image."));
+      img.onload = () => {
+        const maxDim = 600;
+        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+        const width = Math.max(1, Math.round(img.naturalWidth * scale));
+        const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          reject(new Error("Could not initialize image canvas."));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+
+        // Simple white-screen removal fallback for product shots on bright backgrounds.
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const brightness = (r + g + b) / 3;
+          const maxChannelDelta = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+
+          if (brightness >= 240 && maxChannelDelta <= 20) {
+            data[i + 3] = 0;
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +506,14 @@ function renderInspirationEntries() {
     actionsDiv.appendChild(removeBtn);
 
     infoDiv.appendChild(actionsDiv);
+
+    if (entry.processingStatus === "failed" && entry.processingError) {
+      const errText = document.createElement("div");
+      errText.className = "inspiration-error-text";
+      errText.textContent = entry.processingError;
+      infoDiv.appendChild(errText);
+    }
+
     li.appendChild(infoDiv);
     inspirationList.appendChild(li);
   }
