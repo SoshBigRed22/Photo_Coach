@@ -299,6 +299,7 @@ function renderPiercingFitAssessment(assessment) {
 // ---------------------------------------------------------------------------
 function assessPiercingFit(context) {
   if (!context || !context.filter || context.filter === "none") return null;
+  if (context.filter === "custom-inspiration" && !customOverlayImage) return null;
 
   const guide   = PIERCING_STYLE_GUIDE[context.filter] || {
     preferredShapes: ["oval", "heart", "square", "diamond", "round"],
