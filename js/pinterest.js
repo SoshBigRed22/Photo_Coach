@@ -275,6 +275,31 @@ function isLikelySkinPixel(r, g, b) {
   );
 }
 
+function rgbToHsv(r, g, b) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+
+  let h = 0;
+  if (delta > 0) {
+    if (max === rn) {
+      h = 60 * (((gn - bn) / delta) % 6);
+    } else if (max === gn) {
+      h = 60 * (((bn - rn) / delta) + 2);
+    } else {
+      h = 60 * (((rn - gn) / delta) + 4);
+    }
+  }
+  if (h < 0) h += 360;
+
+  const s = max === 0 ? 0 : (delta / max);
+  const v = max;
+  return { h, s, v };
+}
+
 function buildSeptumForegroundMask(data, width, height) {
   const total = width * height;
   const candidates = new Uint8Array(total);
@@ -296,15 +321,23 @@ function buildSeptumForegroundMask(data, width, height) {
       const r = data[di];
       const g = data[di + 1];
       const b = data[di + 2];
+      const { h, s, v } = rgbToHsv(r, g, b);
       const max = Math.max(r, g, b);
       const min = Math.min(r, g, b);
       const brightness = (r + g + b) / 3;
       const chroma = max - min;
       const isSkin = isLikelySkinPixel(r, g, b);
 
+      const isRedFamily = ((h <= 20 || h >= 340) && s > 0.18 && v > 0.12);
+      const isSilverLike = s < 0.22 && v > 0.20;
+      const isGoldLike = h >= 24 && h <= 62 && s >= 0.15 && v > 0.18;
+      const isRoseGoldLike = h >= 8 && h <= 28 && s >= 0.14 && s <= 0.75 && v > 0.20;
+      const isBlackMetalLike = v < 0.24 && s < 0.38;
+      const isMetalPalette = isSilverLike || isGoldLike || isRoseGoldLike || isBlackMetalLike;
+
       const likelyMetal = brightness > 42 && brightness < 225 && chroma < 58;
       const likelyShadowJewelry = brightness < 90 && chroma < 75;
-      if (!isSkin && (likelyMetal || likelyShadowJewelry)) {
+      if (!isSkin && !isRedFamily && (isMetalPalette || likelyMetal || likelyShadowJewelry)) {
         candidates[pi] = 1;
       }
     }
@@ -361,8 +394,11 @@ function buildSeptumForegroundMask(data, width, height) {
     const dist = Math.hypot(cx - centerX, cy - centerY);
     const spanX = maxX - minX + 1;
     const spanY = maxY - minY + 1;
+    const aspect = spanX / Math.max(1, spanY);
     const compactPenalty = Math.max(0, (spanX * spanY) - (size * 8));
-    const score = (size * 4.2) - (dist * 5.5) - (compactPenalty * 0.03);
+    const verticalPenalty = spanY > (spanX * 1.55) ? (spanY - (spanX * 1.55)) * 2.5 : 0;
+    const aspectBonus = Math.max(0, Math.min(3.0, aspect) - 0.8) * 12;
+    const score = (size * 4.2) + aspectBonus - (dist * 5.5) - (compactPenalty * 0.03) - verticalPenalty;
 
     if (score > bestScore) {
       bestScore = score;
