@@ -320,20 +320,15 @@ if (addInspirationBtn && inspirationUrlInput) {
 }
 
 if (addOverlayImageBtn && overlayImageInput) {
-  addOverlayImageBtn.addEventListener("click", async () => {
+  addOverlayImageBtn.addEventListener("click", () => {
     const file = overlayImageInput.files?.[0];
     if (!file) {
       alert("Choose a piercing image first.");
       return;
     }
-
-    try {
-      await addInspirationImageEntry(file, inspirationNoteInput?.value || "");
-      overlayImageInput.value = "";
-      if (inspirationNoteInput) inspirationNoteInput.value = "";
-    } catch (error) {
-      alert(error.message || "Could not add image overlay.");
-    }
+    openCropModal(file, inspirationNoteInput?.value || "");
+    overlayImageInput.value = "";
+    if (inspirationNoteInput) inspirationNoteInput.value = "";
   });
 }
 
