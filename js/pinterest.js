@@ -252,6 +252,85 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load overlay image."));
+    img.src = src;
+  });
+}
+
+async function normalizeOverlayDataUrl(src) {
+  const img = await loadImageElement(src);
+  const maxDim = 600;
+  const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) throw new Error("Could not initialize overlay canvas.");
+
+  ctx.drawImage(img, 0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const brightness = (r + g + b) / 3;
+    const maxChannelDelta = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+
+    if (alpha > 0 && brightness >= 240 && maxChannelDelta <= 20) {
+      data[i + 3] = 0;
+    }
+  }
+
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = ((y * width) + x) * 4;
+      if (data[idx + 3] > 24) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  if (maxX < minX || maxY < minY) {
+    return canvas.toDataURL("image/png");
+  }
+
+  const padX = Math.max(2, Math.round((maxX - minX + 1) * 0.12));
+  const padY = Math.max(2, Math.round((maxY - minY + 1) * 0.12));
+  const cropX = Math.max(0, minX - padX);
+  const cropY = Math.max(0, minY - padY);
+  const cropW = Math.min(width - cropX, (maxX - minX + 1) + (padX * 2));
+  const cropH = Math.min(height - cropY, (maxY - minY + 1) + (padY * 2));
+
+  const trimmedCanvas = document.createElement("canvas");
+  trimmedCanvas.width = cropW;
+  trimmedCanvas.height = cropH;
+  const trimmedCtx = trimmedCanvas.getContext("2d");
+  if (!trimmedCtx) throw new Error("Could not initialize trimmed overlay canvas.");
+
+  trimmedCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  return trimmedCanvas.toDataURL("image/png");
+}
+
 function createOverlayDataUrlFromFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -292,7 +371,7 @@ function createOverlayDataUrlFromFile(file) {
         }
 
         ctx.putImageData(imageData, 0, 0);
-        resolve(canvas.toDataURL("image/png"));
+        normalizeOverlayDataUrl(canvas.toDataURL("image/png")).then(resolve).catch(reject);
       };
       img.src = String(reader.result || "");
     };
@@ -309,14 +388,25 @@ function applyInspirationOverlay(entryOrId) {
     : entryOrId;
   if (!entry || !entry.processedImage) return;
 
-  const img  = new Image();
-  img.onload = () => {
-    customOverlayImage     = img;
-    customOverlayPlacement = entry.placement || "septum";
-    if (filterSelect) filterSelect.value = "custom-inspiration";
-    applyFilterControlState();
-  };
-  img.src = entry.processedImage;
+  normalizeOverlayDataUrl(entry.processedImage)
+    .then((normalizedSrc) => loadImageElement(normalizedSrc).then((img) => ({ img, normalizedSrc })))
+    .then(({ img, normalizedSrc }) => {
+      customOverlayImage = img;
+      customOverlayPlacement = entry.placement || "septum";
+
+      const idx = inspirationEntries.findIndex((item) => item && item.id === entry.id);
+      if (idx !== -1 && inspirationEntries[idx].processedImage !== normalizedSrc) {
+        inspirationEntries[idx].processedImage = normalizedSrc;
+        persistInspirationEntries();
+        renderInspirationEntries();
+      }
+
+      if (filterSelect) filterSelect.value = "custom-inspiration";
+      applyFilterControlState();
+    })
+    .catch((error) => {
+      console.error("[Inspiration] Could not apply custom overlay:", error);
+    });
 }
 
 // ---------------------------------------------------------------------------
