@@ -555,6 +555,223 @@ function createOverlayDataUrlFromFile(file) {
 }
 
 // ---------------------------------------------------------------------------
+// Crop Modal — lets the user drag-select just the jewelry from an uploaded image
+// ---------------------------------------------------------------------------
+let _cropPendingFile = null;
+let _cropPendingNote = null;
+let _cropOriginalImage = null;
+let _cropSel = null;
+let _cropDragging = false;
+let _cropStart = null;
+
+function openCropModal(file, note) {
+  _cropPendingFile = file;
+  _cropPendingNote = note || "";
+  _cropSel = null;
+  _cropDragging = false;
+  _cropStart = null;
+
+  const modal = document.getElementById("cropModal");
+  const canvas = document.getElementById("cropCanvas");
+  if (!modal || !canvas) {
+    addInspirationImageEntry(file, note || "");
+    return;
+  }
+
+  const img = new Image();
+  img.onload = () => {
+    _cropOriginalImage = img;
+    const maxW = Math.min(500, window.innerWidth - 80);
+    const scale = Math.min(1, maxW / img.naturalWidth);
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    _drawCropCanvas();
+    _initCropEvents();
+    modal.hidden = false;
+    modal.focus();
+  };
+  img.onerror = () => {
+    addInspirationImageEntry(file, note || "");
+  };
+
+  const reader = new FileReader();
+  reader.onload = (e) => { img.src = String(e.target.result || ""); };
+  reader.readAsDataURL(file);
+}
+
+function _drawCropCanvas() {
+  const canvas = document.getElementById("cropCanvas");
+  if (!canvas || !_cropOriginalImage) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(_cropOriginalImage, 0, 0, canvas.width, canvas.height);
+
+  if (_cropSel && _cropSel.w > 2 && _cropSel.h > 2) {
+    const { x, y, w, h } = _cropSel;
+    // Dim areas outside selection
+    ctx.fillStyle = "rgba(0, 0, 0, 0.48)";
+    ctx.fillRect(0, 0, canvas.width, y);
+    ctx.fillRect(0, y + h, canvas.width, canvas.height - y - h);
+    ctx.fillRect(0, y, x, h);
+    ctx.fillRect(x + w, y, canvas.width - x - w, h);
+    // Dashed white border
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+    ctx.setLineDash([]);
+    // Corner handles
+    const hs = 8;
+    ctx.fillStyle = "#ffffff";
+    [[x, y], [x + w - hs, y], [x, y + h - hs], [x + w - hs, y + h - hs]].forEach(([cx, cy]) => {
+      ctx.fillRect(cx, cy, hs, hs);
+    });
+  }
+}
+
+function _getCanvasPos(e, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: Math.max(0, Math.min(canvas.width, (src.clientX - rect.left) * sx)),
+    y: Math.max(0, Math.min(canvas.height, (src.clientY - rect.top) * sy)),
+  };
+}
+
+function _initCropEvents() {
+  const canvas = document.getElementById("cropCanvas");
+  if (!canvas || canvas._cropEventsAttached) return;
+  canvas._cropEventsAttached = true;
+
+  function onStart(e) {
+    e.preventDefault();
+    _cropDragging = true;
+    _cropStart = _getCanvasPos(e, canvas);
+    _cropSel = { x: _cropStart.x, y: _cropStart.y, w: 0, h: 0 };
+  }
+
+  function onMove(e) {
+    if (!_cropDragging) return;
+    e.preventDefault();
+    const pos = _getCanvasPos(e, canvas);
+    _cropSel = {
+      x: Math.min(_cropStart.x, pos.x),
+      y: Math.min(_cropStart.y, pos.y),
+      w: Math.abs(pos.x - _cropStart.x),
+      h: Math.abs(pos.y - _cropStart.y),
+    };
+    _drawCropCanvas();
+  }
+
+  function onEnd() {
+    _cropDragging = false;
+    _drawCropCanvas();
+  }
+
+  canvas.addEventListener("mousedown",  onStart);
+  canvas.addEventListener("mousemove",  onMove);
+  canvas.addEventListener("mouseup",    onEnd);
+  canvas.addEventListener("mouseleave", onEnd);
+  canvas.addEventListener("touchstart", onStart, { passive: false });
+  canvas.addEventListener("touchmove",  onMove,  { passive: false });
+  canvas.addEventListener("touchend",   onEnd);
+}
+
+function confirmCrop() {
+  if (!_cropSel || _cropSel.w < 8 || _cropSel.h < 8) {
+    alert("Please drag to select the jewelry area first.");
+    return;
+  }
+
+  const canvas = document.getElementById("cropCanvas");
+  if (!_cropOriginalImage || !canvas) {
+    closeCropModal();
+    if (_cropPendingFile) addInspirationImageEntry(_cropPendingFile, _cropPendingNote || "");
+    return;
+  }
+
+  // Map display coords → original image coords
+  const scaleX = _cropOriginalImage.naturalWidth  / canvas.width;
+  const scaleY = _cropOriginalImage.naturalHeight / canvas.height;
+  const srcX = Math.round(_cropSel.x * scaleX);
+  const srcY = Math.round(_cropSel.y * scaleY);
+  const srcW = Math.max(1, Math.round(_cropSel.w * scaleX));
+  const srcH = Math.max(1, Math.round(_cropSel.h * scaleY));
+
+  // Draw cropped region into a temp canvas
+  const tmp = document.createElement("canvas");
+  tmp.width  = srcW;
+  tmp.height = srcH;
+  const tmpCtx = tmp.getContext("2d");
+  tmpCtx.drawImage(_cropOriginalImage, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+
+  // Remove near-white background (helps if the crop includes a white background around the jewelry)
+  const imgData = tmpCtx.getImageData(0, 0, srcW, srcH);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const brightness = (d[i] + d[i + 1] + d[i + 2]) / 3;
+    const maxDelta = Math.max(Math.abs(d[i] - d[i + 1]), Math.abs(d[i + 1] - d[i + 2]), Math.abs(d[i] - d[i + 2]));
+    if (brightness >= 230 && maxDelta <= 25) d[i + 3] = 0;
+  }
+  tmpCtx.putImageData(imgData, 0, 0);
+
+  const croppedDataUrl = tmp.toDataURL("image/png");
+
+  const file = _cropPendingFile;
+  const note = _cropPendingNote || "";
+  closeCropModal();
+  _cropPendingFile = null;
+  _cropPendingNote = null;
+
+  // Build the entry with the cropped image directly — no server, no heuristics
+  const safeName    = String(file.name || "cropped-image").trim();
+  const styleTokens = parseStyleTokens(`${safeName} ${note}`);
+  const entry = {
+    id:               `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceType:       "upload",
+    url:              `upload://${safeName}`,
+    note:             note.trim() || safeName,
+    styleTokens,
+    addedAt:          Date.now(),
+    placement:        inferPlacement(styleTokens),
+    processedImage:   croppedDataUrl,
+    processingStatus: "done",
+    processingError:  null,
+  };
+
+  inspirationEntries = [entry, ...inspirationEntries].slice(0, 12);
+  persistInspirationEntries();
+  renderInspirationEntries();
+  selectedPhotoContext = buildPhotoContext(selectedPhotoContext?.source || "empty");
+
+  if (overlayUploadStatus) {
+    overlayUploadStatus.textContent = "Cropped image ready. Applying overlay...";
+  }
+
+  applyInspirationOverlay(entry);
+}
+
+function skipCrop() {
+  const file = _cropPendingFile;
+  const note = _cropPendingNote || "";
+  closeCropModal();
+  _cropPendingFile = null;
+  _cropPendingNote = null;
+  if (file) addInspirationImageEntry(file, note);
+}
+
+function closeCropModal() {
+  const modal = document.getElementById("cropModal");
+  if (modal) modal.hidden = true;
+  _cropSel = null;
+  _cropDragging = false;
+  _cropStart = null;
+  _cropOriginalImage = null;
+}
+
+// ---------------------------------------------------------------------------
 // Apply a processed pin as the live overlay
 // ---------------------------------------------------------------------------
 function applyInspirationOverlay(entryOrId) {
