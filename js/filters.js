@@ -280,7 +280,7 @@ function drawCustomImageOverlay(ctx, box) {
   const placement = customOverlayPlacement || "septum";
   const anchor = getPlacementAnchor(placement, box);
   const baseScale = placement === "septum"
-    ? 0.11
+    ? 0.18
     : placement === "nostril-left"
       ? 0.08
       : placement === "brow-left"
