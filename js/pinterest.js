@@ -261,7 +261,21 @@ function loadImageElement(src) {
   });
 }
 
-async function normalizeOverlayDataUrl(src) {
+function isLikelySkinPixel(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return (
+    r > 95 &&
+    g > 40 &&
+    b > 20 &&
+    (max - min) > 15 &&
+    Math.abs(r - g) > 15 &&
+    r > g &&
+    r > b
+  );
+}
+
+async function normalizeOverlayDataUrl(src, placement = "septum") {
   const img = await loadImageElement(src);
   const maxDim = 600;
   const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
@@ -288,6 +302,67 @@ async function normalizeOverlayDataUrl(src) {
 
     if (alpha > 0 && brightness >= 240 && maxChannelDelta <= 20) {
       data[i + 3] = 0;
+    }
+  }
+
+  if (placement === "septum") {
+    const focusLeft = Math.floor(width * 0.18);
+    const focusRight = Math.ceil(width * 0.82);
+    const focusTop = Math.floor(height * 0.18);
+    const focusBottom = Math.ceil(height * 0.62);
+
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = focusTop; y < focusBottom; y += 1) {
+      for (let x = focusLeft; x < focusRight; x += 1) {
+        const idx = ((y * width) + x) * 4;
+        const alpha = data[idx + 3];
+        if (alpha === 0) continue;
+
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const brightness = (r + g + b) / 3;
+        const maxChannelDelta = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+        const isSkin = isLikelySkinPixel(r, g, b);
+        const candidate = !isSkin || brightness < 95 || maxChannelDelta > 28;
+
+        if (candidate) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX >= minX && maxY >= minY) {
+      const padX = Math.max(3, Math.round((maxX - minX + 1) * 0.18));
+      const padY = Math.max(3, Math.round((maxY - minY + 1) * 0.18));
+      const keepLeft = Math.max(0, minX - padX);
+      const keepRight = Math.min(width - 1, maxX + padX);
+      const keepTop = Math.max(0, minY - padY);
+      const keepBottom = Math.min(height - 1, maxY + padY);
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const idx = ((y * width) + x) * 4;
+          if (x < keepLeft || x > keepRight || y < keepTop || y > keepBottom) {
+            data[idx + 3] = 0;
+            continue;
+          }
+
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          if (isLikelySkinPixel(r, g, b)) {
+            data[idx + 3] = 0;
+          }
+        }
+      }
     }
   }
 
@@ -371,7 +446,7 @@ function createOverlayDataUrlFromFile(file) {
         }
 
         ctx.putImageData(imageData, 0, 0);
-        normalizeOverlayDataUrl(canvas.toDataURL("image/png")).then(resolve).catch(reject);
+        normalizeOverlayDataUrl(canvas.toDataURL("image/png"), "septum").then(resolve).catch(reject);
       };
       img.src = String(reader.result || "");
     };
@@ -388,7 +463,7 @@ function applyInspirationOverlay(entryOrId) {
     : entryOrId;
   if (!entry || !entry.processedImage) return;
 
-  normalizeOverlayDataUrl(entry.processedImage)
+  normalizeOverlayDataUrl(entry.processedImage, entry.placement || "septum")
     .then((normalizedSrc) => loadImageElement(normalizedSrc).then((img) => ({ img, normalizedSrc })))
     .then(({ img, normalizedSrc }) => {
       customOverlayImage = img;
