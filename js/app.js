@@ -454,9 +454,25 @@ analyzeBtn.addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 
 configureHostedModeUI();
-applyFilterControlState();
-loadInspirationEntries();
-renderInspirationEntries();
+console.log("[APP] Config applied");
+try {
+  applyFilterControlState();
+  console.log("[APP] Filter control state applied");
+} catch (e) {
+  console.error("[APP] Error in applyFilterControlState:", e);
+}
+try {
+  loadInspirationEntries();
+  console.log("[APP] Inspiration entries loaded, count:", inspirationEntries.length);
+} catch (e) {
+  console.error("[APP] Error in loadInspirationEntries:", e);
+}
+try {
+  renderInspirationEntries();
+  console.log("[APP] Inspiration entries rendered");
+} catch (e) {
+  console.error("[APP] Error in renderInspirationEntries:", e);
+}
 populateCameraSelect().catch((error) => {
   console.error("[PhotoCoach] initial camera scan error:", error);
   setCameraStatus("Could not scan camera devices yet. Click Refresh.");
