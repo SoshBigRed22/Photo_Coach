@@ -275,6 +275,122 @@ function isLikelySkinPixel(r, g, b) {
   );
 }
 
+function buildSeptumForegroundMask(data, width, height) {
+  const total = width * height;
+  const candidates = new Uint8Array(total);
+
+  const focusLeft = Math.floor(width * 0.18);
+  const focusRight = Math.ceil(width * 0.82);
+  const focusTop = Math.floor(height * 0.14);
+  const focusBottom = Math.ceil(height * 0.66);
+  const centerX = width * 0.5;
+  const centerY = height * 0.42;
+
+  for (let y = focusTop; y < focusBottom; y += 1) {
+    for (let x = focusLeft; x < focusRight; x += 1) {
+      const pi = (y * width) + x;
+      const di = pi * 4;
+      const alpha = data[di + 3];
+      if (alpha < 20) continue;
+
+      const r = data[di];
+      const g = data[di + 1];
+      const b = data[di + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const brightness = (r + g + b) / 3;
+      const chroma = max - min;
+      const isSkin = isLikelySkinPixel(r, g, b);
+
+      const likelyMetal = brightness > 42 && brightness < 225 && chroma < 58;
+      const likelyShadowJewelry = brightness < 90 && chroma < 75;
+      if (!isSkin && (likelyMetal || likelyShadowJewelry)) {
+        candidates[pi] = 1;
+      }
+    }
+  }
+
+  let bestPixels = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  const stack = [];
+
+  for (let idx = 0; idx < total; idx += 1) {
+    if (!candidates[idx]) continue;
+
+    candidates[idx] = 0;
+    stack.push(idx);
+
+    let size = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    const pixels = [];
+
+    while (stack.length) {
+      const cur = stack.pop();
+      pixels.push(cur);
+      size += 1;
+
+      const y = Math.floor(cur / width);
+      const x = cur - (y * width);
+      sumX += x;
+      sumY += y;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+
+      const left = x > 0 ? cur - 1 : -1;
+      const right = x < width - 1 ? cur + 1 : -1;
+      const up = y > 0 ? cur - width : -1;
+      const down = y < height - 1 ? cur + width : -1;
+
+      if (left !== -1 && candidates[left]) { candidates[left] = 0; stack.push(left); }
+      if (right !== -1 && candidates[right]) { candidates[right] = 0; stack.push(right); }
+      if (up !== -1 && candidates[up]) { candidates[up] = 0; stack.push(up); }
+      if (down !== -1 && candidates[down]) { candidates[down] = 0; stack.push(down); }
+    }
+
+    if (size < 12) continue;
+
+    const cx = sumX / size;
+    const cy = sumY / size;
+    const dist = Math.hypot(cx - centerX, cy - centerY);
+    const spanX = maxX - minX + 1;
+    const spanY = maxY - minY + 1;
+    const compactPenalty = Math.max(0, (spanX * spanY) - (size * 8));
+    const score = (size * 4.2) - (dist * 5.5) - (compactPenalty * 0.03);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestPixels = pixels;
+    }
+  }
+
+  if (!bestPixels || !bestPixels.length) return null;
+
+  const keep = new Uint8Array(total);
+  for (const px of bestPixels) keep[px] = 1;
+
+  // Dilate by 1px so thin jewelry details survive alpha cut.
+  const dilated = new Uint8Array(total);
+  for (let i = 0; i < total; i += 1) {
+    if (!keep[i]) continue;
+    dilated[i] = 1;
+    const y = Math.floor(i / width);
+    const x = i - (y * width);
+    if (x > 0) dilated[i - 1] = 1;
+    if (x < width - 1) dilated[i + 1] = 1;
+    if (y > 0) dilated[i - width] = 1;
+    if (y < height - 1) dilated[i + width] = 1;
+  }
+
+  return dilated;
+}
+
 async function normalizeOverlayDataUrl(src, placement = "septum") {
   const img = await loadImageElement(src);
   const maxDim = 600;
@@ -306,62 +422,10 @@ async function normalizeOverlayDataUrl(src, placement = "septum") {
   }
 
   if (placement === "septum") {
-    const focusLeft = Math.floor(width * 0.18);
-    const focusRight = Math.ceil(width * 0.82);
-    const focusTop = Math.floor(height * 0.18);
-    const focusBottom = Math.ceil(height * 0.62);
-
-    let minX = width;
-    let minY = height;
-    let maxX = -1;
-    let maxY = -1;
-
-    for (let y = focusTop; y < focusBottom; y += 1) {
-      for (let x = focusLeft; x < focusRight; x += 1) {
-        const idx = ((y * width) + x) * 4;
-        const alpha = data[idx + 3];
-        if (alpha === 0) continue;
-
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        const brightness = (r + g + b) / 3;
-        const maxChannelDelta = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
-        const isSkin = isLikelySkinPixel(r, g, b);
-        const candidate = !isSkin || brightness < 95 || maxChannelDelta > 28;
-
-        if (candidate) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    if (maxX >= minX && maxY >= minY) {
-      const padX = Math.max(3, Math.round((maxX - minX + 1) * 0.18));
-      const padY = Math.max(3, Math.round((maxY - minY + 1) * 0.18));
-      const keepLeft = Math.max(0, minX - padX);
-      const keepRight = Math.min(width - 1, maxX + padX);
-      const keepTop = Math.max(0, minY - padY);
-      const keepBottom = Math.min(height - 1, maxY + padY);
-
-      for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-          const idx = ((y * width) + x) * 4;
-          if (x < keepLeft || x > keepRight || y < keepTop || y > keepBottom) {
-            data[idx + 3] = 0;
-            continue;
-          }
-
-          const r = data[idx];
-          const g = data[idx + 1];
-          const b = data[idx + 2];
-          if (isLikelySkinPixel(r, g, b)) {
-            data[idx + 3] = 0;
-          }
-        }
+    const keepMask = buildSeptumForegroundMask(data, width, height);
+    if (keepMask) {
+      for (let i = 0; i < keepMask.length; i += 1) {
+        if (!keepMask[i]) data[(i * 4) + 3] = 0;
       }
     }
   }
