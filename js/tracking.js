@@ -189,6 +189,9 @@ function drawFaceBox(box) {
 // ---------------------------------------------------------------------------
 function runOverlayRenderLoop() {
   if (!faceTrackingActive || !faceOverlay) {
+    if (!faceTrackingActive && overlayRenderRafId) {
+      console.warn("[TRACKING] Render loop stopped: faceTrackingActive=", faceTrackingActive);
+    }
     overlayRenderRafId = null;
     return;
   }
@@ -197,6 +200,7 @@ function runOverlayRenderLoop() {
   const displayHeight = Math.round(faceOverlay.clientHeight);
 
   if (displayWidth <= 0 || displayHeight <= 0) {
+    console.warn("[TRACKING] Invalid canvas size:", displayWidth, displayHeight);
     overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
     return;
   }
@@ -208,6 +212,7 @@ function runOverlayRenderLoop() {
 
   if (!targetTrackedBox) {
     if (missedTrackingFrames > 3) {
+      console.log("[TRACKING] Clearing face - no face detected");
       renderedTrackedBox = null;
       clearFaceOverlay();
     }
@@ -370,7 +375,9 @@ function startServerFaceTracking() {
 }
 
 function startFaceTracking() {
+  console.log("[TRACKING] startFaceTracking called, faceOverlay exists?", !!faceOverlay);
   if (!faceOverlay) {
+    console.warn("[TRACKING] No faceOverlay - cannot start");
     clearFaceOverlay();
     return;
   }
@@ -379,6 +386,7 @@ function startFaceTracking() {
   void initializeFaceMesh();
 
   if (supportsFaceDetector) {
+    console.log("[TRACKING] Using FaceDetector API");
     stopFaceTracking();
     faceTrackingActive = true;
     faceTrackingMode   = "local";
