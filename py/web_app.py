@@ -20,45 +20,37 @@ except ModuleNotFoundError:  # pragma: no cover
 from flask import Flask, jsonify, redirect, render_template, request
 
 # ---------------------------------------------------------------------------
-# rembg (U²-Net) — optional; GrabCut is used as fallback if unavailable
+# rembg (U²-Net) — optional and lazy-loaded to avoid startup OOM on free tier
 # ---------------------------------------------------------------------------
+_rembg_enabled = os.environ.get("REMBG_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _rembg_remove = None
 _rembg_new_session = None
-try:
-    from rembg import remove as _rembg_remove, new_session as _rembg_new_session  # type: ignore[import-untyped]
-    _REMBG_AVAILABLE = True
-except ImportError:
-    _REMBG_AVAILABLE = False
-
 _rembg_session = None
-_rembg_session_lock = None
+
 
 def _get_rembg_session():
-    """Lazy-load the rembg session on first use to avoid startup OOM on Render free tier."""
-    global _rembg_session, _rembg_session_lock
-    if not _REMBG_AVAILABLE:
+    """Import rembg lazily and create a lightweight u2netp session on first use."""
+    global _rembg_enabled, _rembg_remove, _rembg_new_session, _rembg_session
+    if not _rembg_enabled:
         return None
-    if _rembg_session is not None:
+
+    if _rembg_session is not None and _rembg_remove is not None:
         return _rembg_session
-    try:
-        # u2netp is the lightweight model (~4MB vs ~176MB for u2net), fits in 512MB RAM
-        _rembg_session = _rembg_new_session("u2netp")  # type: ignore[misc]
-        print("[INFO] rembg u2netp model ready")
-    except Exception as exc:
-        print(f"[WARN] rembg session init failed: {exc}")
-    return _rembg_session
 
-def _preload_rembg_model():
-    """Download/cache the u2netp model in a background thread at startup."""
-    if not _REMBG_AVAILABLE:
-        return
     try:
-        _get_rembg_session()
-    except Exception as exc:
-        print(f"[WARN] rembg model preload failed: {exc}")
+        if _rembg_remove is None or _rembg_new_session is None:
+            from rembg import remove as imported_remove, new_session as imported_new_session  # type: ignore[import-untyped]
+            _rembg_remove = imported_remove
+            _rembg_new_session = imported_new_session
 
-import threading as _threading
-_threading.Thread(target=_preload_rembg_model, daemon=True).start()
+        _rembg_session = _rembg_new_session("u2netp")
+        print("[INFO] rembg u2netp ready")
+        return _rembg_session
+    except Exception as exc:
+        # Disable rembg for this process after a failure and continue with GrabCut.
+        _rembg_enabled = False
+        print(f"[WARN] rembg unavailable, using GrabCut fallback: {exc}")
+        return None
 
 from analyzer import analyze_image
 from suggestions import build_suggestions, calculate_metric_scores, calculate_quality_score
@@ -449,19 +441,18 @@ def frame_probe(frame) -> dict:
 def remove_background_to_data_url(img, raw_bytes: bytes | None = None) -> str:
     """Extract foreground with alpha and return a data:image/png;base64 URL.
 
-    Tries rembg (U²-Net neural matting) first when raw_bytes are available,
+    Tries rembg (U²-Net neural matting) first when explicitly enabled,
     then falls back to the OpenCV GrabCut approach.
     """
-    global _rembg_session
-
     # ── rembg path ────────────────────────────────────────────────────────
-    if _REMBG_AVAILABLE and raw_bytes is not None:
+    if _rembg_enabled and raw_bytes is not None:
         try:
             sess = _get_rembg_session()
-            result = _rembg_remove(raw_bytes, session=sess)  # type: ignore[misc]
-            b64 = base64.b64encode(result).decode("utf-8")
-            print("[INFO] Background removed via rembg U\u00b2-Net")
-            return f"data:image/png;base64,{b64}"
+            if sess is not None and _rembg_remove is not None:
+                result = _rembg_remove(raw_bytes, session=sess)
+                b64 = base64.b64encode(result).decode("utf-8")
+                print("[INFO] Background removed via rembg u2netp")
+                return f"data:image/png;base64,{b64}"
         except Exception as exc:
             print(f"[WARN] rembg failed, falling back to GrabCut: {exc}")
 
