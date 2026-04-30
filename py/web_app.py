@@ -31,15 +31,29 @@ except ImportError:
     _REMBG_AVAILABLE = False
 
 _rembg_session = None
+_rembg_session_lock = None
+
+def _get_rembg_session():
+    """Lazy-load the rembg session on first use to avoid startup OOM on Render free tier."""
+    global _rembg_session, _rembg_session_lock
+    if not _REMBG_AVAILABLE:
+        return None
+    if _rembg_session is not None:
+        return _rembg_session
+    try:
+        # u2netp is the lightweight model (~4MB vs ~176MB for u2net), fits in 512MB RAM
+        _rembg_session = _rembg_new_session("u2netp")  # type: ignore[misc]
+        print("[INFO] rembg u2netp model ready")
+    except Exception as exc:
+        print(f"[WARN] rembg session init failed: {exc}")
+    return _rembg_session
 
 def _preload_rembg_model():
-    """Download/cache the U²-Net model in a background thread at startup."""
-    global _rembg_session
+    """Download/cache the u2netp model in a background thread at startup."""
     if not _REMBG_AVAILABLE:
         return
     try:
-        _rembg_session = _rembg_new_session("u2net")  # type: ignore[misc]
-        print("[INFO] rembg U\u00b2-Net model ready")
+        _get_rembg_session()
     except Exception as exc:
         print(f"[WARN] rembg model preload failed: {exc}")
 
@@ -443,7 +457,7 @@ def remove_background_to_data_url(img, raw_bytes: bytes | None = None) -> str:
     # ── rembg path ────────────────────────────────────────────────────────
     if _REMBG_AVAILABLE and raw_bytes is not None:
         try:
-            sess = _rembg_session  # None if still loading — rembg handles it
+            sess = _get_rembg_session()
             result = _rembg_remove(raw_bytes, session=sess)  # type: ignore[misc]
             b64 = base64.b64encode(result).decode("utf-8")
             print("[INFO] Background removed via rembg U\u00b2-Net")
