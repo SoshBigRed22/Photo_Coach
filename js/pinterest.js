@@ -737,6 +737,7 @@ function confirmCrop() {
     addedAt:          Date.now(),
     placement:        inferPlacement(styleTokens),
     processedImage:   croppedDataUrl,
+    normalizationMode: "manual-crop",
     processingStatus: "done",
     processingError:  null,
   };
@@ -780,7 +781,11 @@ function applyInspirationOverlay(entryOrId) {
     : entryOrId;
   if (!entry || !entry.processedImage) return;
 
-  normalizeOverlayDataUrl(entry.processedImage, entry.placement || "septum")
+  const overlaySrcPromise = entry.normalizationMode === "manual-crop"
+    ? Promise.resolve(entry.processedImage)
+    : normalizeOverlayDataUrl(entry.processedImage, entry.placement || "septum");
+
+  overlaySrcPromise
     .then((normalizedSrc) => loadImageElement(normalizedSrc).then((img) => ({ img, normalizedSrc })))
     .then(({ img, normalizedSrc }) => {
       customOverlayImage = img;
@@ -836,6 +841,7 @@ function loadInspirationEntries() {
           addedAt:          Number.isFinite(entry.addedAt) ? entry.addedAt : Date.now(),
           placement:        entry.placement || inferPlacement(styleTokens),
           processedImage:   entry.processedImage || null,
+          normalizationMode: entry.normalizationMode === "manual-crop" ? "manual-crop" : "auto",
           processingStatus: entry.processedImage ? "done" : (entry.processingStatus || "idle"),
           processingError:  entry.processingError || null,
         };
