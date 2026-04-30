@@ -19,6 +19,33 @@ except ModuleNotFoundError:  # pragma: no cover
     requests = None
 from flask import Flask, jsonify, redirect, render_template, request
 
+# ---------------------------------------------------------------------------
+# rembg (U²-Net) — optional; GrabCut is used as fallback if unavailable
+# ---------------------------------------------------------------------------
+_rembg_remove = None
+_rembg_new_session = None
+try:
+    from rembg import remove as _rembg_remove, new_session as _rembg_new_session  # type: ignore[import-untyped]
+    _REMBG_AVAILABLE = True
+except ImportError:
+    _REMBG_AVAILABLE = False
+
+_rembg_session = None
+
+def _preload_rembg_model():
+    """Download/cache the U²-Net model in a background thread at startup."""
+    global _rembg_session
+    if not _REMBG_AVAILABLE:
+        return
+    try:
+        _rembg_session = _rembg_new_session("u2net")  # type: ignore[misc]
+        print("[INFO] rembg U\u00b2-Net model ready")
+    except Exception as exc:
+        print(f"[WARN] rembg model preload failed: {exc}")
+
+import threading as _threading
+_threading.Thread(target=_preload_rembg_model, daemon=True).start()
+
 from analyzer import analyze_image
 from suggestions import build_suggestions, calculate_metric_scores, calculate_quality_score
 
@@ -405,8 +432,26 @@ def frame_probe(frame) -> dict:
     }
 
 
-def remove_background_to_data_url(img) -> str:
-    """Extract foreground with alpha and return a data:image/png;base64 URL."""
+def remove_background_to_data_url(img, raw_bytes: bytes | None = None) -> str:
+    """Extract foreground with alpha and return a data:image/png;base64 URL.
+
+    Tries rembg (U²-Net neural matting) first when raw_bytes are available,
+    then falls back to the OpenCV GrabCut approach.
+    """
+    global _rembg_session
+
+    # ── rembg path ────────────────────────────────────────────────────────
+    if _REMBG_AVAILABLE and raw_bytes is not None:
+        try:
+            sess = _rembg_session  # None if still loading — rembg handles it
+            result = _rembg_remove(raw_bytes, session=sess)  # type: ignore[misc]
+            b64 = base64.b64encode(result).decode("utf-8")
+            print("[INFO] Background removed via rembg U\u00b2-Net")
+            return f"data:image/png;base64,{b64}"
+        except Exception as exc:
+            print(f"[WARN] rembg failed, falling back to GrabCut: {exc}")
+
+    # ── GrabCut fallback ──────────────────────────────────────────────────
     try:
         h, w = img.shape[:2]
         max_dim = 600
@@ -942,7 +987,7 @@ def fetch_pin_image():
         if img is None:
             return jsonify({"error": "Could not decode image data."}), 400
 
-        return jsonify({"image": remove_background_to_data_url(img), "sourceUrl": image_url})
+        return jsonify({"image": remove_background_to_data_url(img, raw_bytes=img_resp.content), "sourceUrl": image_url})
 
     except requests.RequestException as exc:
         return jsonify({"error": f"Failed to fetch image: {exc}"}), 500
@@ -970,7 +1015,7 @@ def process_overlay_upload():
         if img is None:
             return jsonify({"error": "Could not decode uploaded image."}), 400
 
-        return jsonify({"image": remove_background_to_data_url(img), "source": "upload"})
+        return jsonify({"image": remove_background_to_data_url(img, raw_bytes=encoded), "source": "upload"})
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": f"Upload processing failed: {exc}"}), 500
 
