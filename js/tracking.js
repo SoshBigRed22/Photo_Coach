@@ -27,6 +27,26 @@ function debugAverage(values) {
   return total / values.length;
 }
 
+function debugStableAverage(values, hardCeiling = 2000) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const filtered = values.filter((value) => Number.isFinite(value) && value > 0 && value <= hardCeiling);
+  if (!filtered.length) return 0;
+  const p95 = debugPercentile(filtered, 95);
+  const capped = filtered.filter((value) => value <= (p95 * 1.25));
+  if (!capped.length) return debugAverage(filtered);
+  return debugAverage(capped);
+}
+
+function debugMax(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  return values.reduce((max, value) => (Number.isFinite(value) && value > max ? value : max), 0);
+}
+
+function debugCountAbove(values, threshold) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  return values.reduce((count, value) => count + ((Number.isFinite(value) && value > threshold) ? 1 : 0), 0);
+}
+
 function debugPercentile(values, percentile) {
   if (!Array.isArray(values) || values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -105,12 +125,20 @@ function ensureDebugTrackingPanel() {
       },
       timingsMs: {
         detectAvg: debugAverage(debugTrackingState.detectDurationsMs),
+        detectStableAvg: debugStableAverage(debugTrackingState.detectDurationsMs),
+        detectMedian: debugPercentile(debugTrackingState.detectDurationsMs, 50),
         detectP95: debugPercentile(debugTrackingState.detectDurationsMs, 95),
+        detectMax: debugMax(debugTrackingState.detectDurationsMs),
+        detectOver500ms: debugCountAbove(debugTrackingState.detectDurationsMs, 500),
         meshAvg: debugAverage(debugTrackingState.faceMeshDurationsMs),
         detectorAvg: debugAverage(debugTrackingState.faceDetectorDurationsMs),
         drawAvg: debugAverage(debugTrackingState.drawDurationsMs),
         serverRttAvg: debugAverage(debugTrackingState.serverRttMs),
+        serverRttStableAvg: debugStableAverage(debugTrackingState.serverRttMs),
+        serverRttMedian: debugPercentile(debugTrackingState.serverRttMs, 50),
         serverRttP95: debugPercentile(debugTrackingState.serverRttMs, 95),
+        serverRttMax: debugMax(debugTrackingState.serverRttMs),
+        serverRttOver500ms: debugCountAbove(debugTrackingState.serverRttMs, 500),
       },
       samples: {
         detectDurationsMs: [...debugTrackingState.detectDurationsMs],
@@ -173,21 +201,31 @@ function updateDebugTrackingPanel(force = false) {
 
   const cameraStats = getCameraTrackStats();
   const detectAvg = debugAverage(debugTrackingState.detectDurationsMs);
+  const detectStableAvg = debugStableAverage(debugTrackingState.detectDurationsMs);
+  const detectMedian = debugPercentile(debugTrackingState.detectDurationsMs, 50);
   const detectP95 = debugPercentile(debugTrackingState.detectDurationsMs, 95);
+  const detectMax = debugMax(debugTrackingState.detectDurationsMs);
+  const detectOver500 = debugCountAbove(debugTrackingState.detectDurationsMs, 500);
   const meshAvg = debugAverage(debugTrackingState.faceMeshDurationsMs);
   const detectorAvg = debugAverage(debugTrackingState.faceDetectorDurationsMs);
   const drawAvg = debugAverage(debugTrackingState.drawDurationsMs);
   const serverRttAvg = debugAverage(debugTrackingState.serverRttMs);
+  const serverRttStableAvg = debugStableAverage(debugTrackingState.serverRttMs);
+  const serverRttMedian = debugPercentile(debugTrackingState.serverRttMs, 50);
   const serverRttP95 = debugPercentile(debugTrackingState.serverRttMs, 95);
+  const serverRttMax = debugMax(debugTrackingState.serverRttMs);
+  const serverRttOver500 = debugCountAbove(debugTrackingState.serverRttMs, 500);
   const payloadAvg = debugAverage(debugTrackingState.serverPayloadBytes);
 
   metricsEl.textContent = [
     `enabled: ${debugTrackingEnabled ? "yes" : "no"} | mode: ${faceTrackingMode}`,
     `render fps: ${formatMetric(debugTrackingState.renderFps)} | detect fps: ${formatMetric(debugTrackingState.detectFps)}`,
-    `detect ms avg/p95: ${formatMetric(detectAvg)} / ${formatMetric(detectP95)}`,
+    `detect ms median/p95/max: ${formatMetric(detectMedian)} / ${formatMetric(detectP95)} / ${formatMetric(detectMax)}`,
+    `detect ms avg/stable: ${formatMetric(detectAvg)} / ${formatMetric(detectStableAvg)} | >500ms: ${detectOver500}`,
     `mesh ms avg: ${formatMetric(meshAvg)} | detector ms avg: ${formatMetric(detectorAvg)}`,
     `draw ms avg: ${formatMetric(drawAvg)} | missed frames: ${debugTrackingState.missedFrames}`,
-    `server rtt ms avg/p95: ${formatMetric(serverRttAvg)} / ${formatMetric(serverRttP95)}`,
+    `server rtt ms median/p95/max: ${formatMetric(serverRttMedian)} / ${formatMetric(serverRttP95)} / ${formatMetric(serverRttMax)}`,
+    `server rtt ms avg/stable: ${formatMetric(serverRttAvg)} / ${formatMetric(serverRttStableAvg)} | >500ms: ${serverRttOver500}`,
     `server payload bytes avg: ${formatMetric(payloadAvg, 0)}`,
     `camera: ${cameraStats.width || "?"}x${cameraStats.height || "?"} @ ${formatMetric(cameraStats.frameRate)} fps (${cameraStats.facingMode})`,
   ].join("\n");
