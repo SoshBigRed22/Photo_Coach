@@ -536,6 +536,11 @@ def index() -> str:
     return render_template("index.html")
 
 
+@app.get("/privacy-policy")
+def privacy_policy():
+    return redirect("/privacy-policy.html")
+
+
 @app.get("/api/pinterest/config")
 def pinterest_config():
     settings = get_pinterest_settings()
