@@ -57,6 +57,26 @@ body {
   gap: 16px;
 }
 
+.site-footer {
+  margin-top: 18px;
+  padding: 4px 2px 0;
+  text-align: right;
+}
+
+.site-footer-link {
+  font-size: 0.78rem;
+  color: rgba(26, 27, 29, 0.55);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.site-footer-link:hover,
+.site-footer-link:focus-visible {
+  color: rgba(19, 111, 99, 0.9);
+  border-bottom-color: rgba(19, 111, 99, 0.5);
+}
+
 .card {
   background: var(--panel);
   -webkit-backdrop-filter: blur(6px);
@@ -671,6 +691,10 @@ button:disabled {
   video,
   #previewImage {
     aspect-ratio: 4 / 3;
+  }
+
+  .site-footer {
+    text-align: left;
   }
 }
 
