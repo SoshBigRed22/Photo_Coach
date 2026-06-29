@@ -473,4 +473,22 @@ populateCameraSelect().catch((error) => {
   setCameraStatus("Could not scan camera devices yet. Click Refresh.");
 });
 
+try {
+  const debugFromUrl = new URLSearchParams(window.location.search).get("debug");
+  if (debugFromUrl === "1" || debugFromUrl === "true" || debugFromUrl === "on") {
+    setDebugTrackingEnabled(true);
+    console.log("[APP] Tracking debug mode enabled from URL parameter.");
+  }
+} catch (error) {
+  console.warn("[APP] Could not read debug URL parameter:", error);
+}
+
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "d") {
+    event.preventDefault();
+    toggleDebugTracking();
+    console.log("[APP] Tracking debug mode toggled:", debugTrackingEnabled ? "on" : "off");
+  }
+});
+
 window.addEventListener("beforeunload", () => stopActiveStream());
