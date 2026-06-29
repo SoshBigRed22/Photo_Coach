@@ -356,7 +356,7 @@ function stopFaceTracking() {
     faceTrackingRafId = null;
   }
   if (serverFaceTrackingTimer !== null) {
-    clearInterval(serverFaceTrackingTimer);
+    clearTimeout(serverFaceTrackingTimer);
     serverFaceTrackingTimer = null;
   }
   if (overlayRenderRafId !== null) {
@@ -367,6 +367,47 @@ function stopFaceTracking() {
   serverFaceTrackingBusy = false;
   resetTrackingVisualState();
   clearFaceOverlay();
+}
+
+function getServerTrackingProfile() {
+  const isCompactViewport = window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
+  let maxSampleWidth = isCompactViewport ? 320 : 420;
+  let jpegQuality = isCompactViewport ? 0.5 : 0.58;
+
+  if (serverTrackingLastRttMs > 360) {
+    maxSampleWidth = Math.min(maxSampleWidth, 260);
+    jpegQuality = Math.min(jpegQuality, 0.42);
+  } else if (serverTrackingLastRttMs > 300) {
+    maxSampleWidth = Math.min(maxSampleWidth, 300);
+    jpegQuality = Math.min(jpegQuality, 0.48);
+  }
+
+  return {
+    maxSampleWidth,
+    jpegQuality,
+  };
+}
+
+function computeNextServerTrackingInterval(lastRttMs) {
+  // Keep one active request at a time and adapt cadence to observed round-trip latency.
+  const base = Math.max(90, (lastRttMs || 240) * 0.82);
+  return Math.max(90, Math.min(420, Math.round(base)));
+}
+
+function scheduleNextServerFaceTrackingPoll(delayMs = 0) {
+  if (!faceTrackingActive || faceTrackingMode !== "server") return;
+  if (serverFaceTrackingTimer !== null) {
+    clearTimeout(serverFaceTrackingTimer);
+    serverFaceTrackingTimer = null;
+  }
+
+  const clampedDelay = Math.max(0, Math.min(500, Math.round(delayMs)));
+  serverFaceTrackingTimer = setTimeout(async () => {
+    serverFaceTrackingTimer = null;
+    await pollServerFaceTracking();
+    if (!faceTrackingActive || faceTrackingMode !== "server") return;
+    scheduleNextServerFaceTrackingPoll(serverTrackingIntervalMs);
+  }, clampedDelay);
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +602,8 @@ async function pollServerFaceTracking() {
     faceOverlay.height = displayHeight;
   }
 
-  const sampleWidth  = Math.min(480, cameraFeed.videoWidth);
+  const profile = getServerTrackingProfile();
+  const sampleWidth  = Math.min(profile.maxSampleWidth, cameraFeed.videoWidth);
   const sampleHeight = Math.round((sampleWidth / cameraFeed.videoWidth) * cameraFeed.videoHeight);
   serverTrackingCanvas.width  = sampleWidth;
   serverTrackingCanvas.height = sampleHeight;
@@ -571,7 +613,7 @@ async function pollServerFaceTracking() {
   ctx.drawImage(cameraFeed, 0, 0, sampleWidth, sampleHeight);
 
   const blob = await new Promise((resolve) => {
-    serverTrackingCanvas.toBlob(resolve, "image/jpeg", 0.65);
+    serverTrackingCanvas.toBlob(resolve, "image/jpeg", profile.jpegQuality);
   });
   if (!blob) return;
 
@@ -616,9 +658,18 @@ async function pollServerFaceTracking() {
     if (missedTrackingFrames > 3) targetTrackedBox = null;
   } finally {
     if (debugTrackingEnabled) {
-      pushDebugSample(debugTrackingState.serverRttMs, performance.now() - requestStart);
+      const requestDurationMs = performance.now() - requestStart;
+      serverTrackingLastRttMs = requestDurationMs;
+      serverTrackingIntervalMs = computeNextServerTrackingInterval(requestDurationMs);
+      pushDebugSample(debugTrackingState.serverRttMs, requestDurationMs);
+      // In server mode, request round-trip time is the effective detection latency.
+      recordDebugDetectTick(requestDurationMs, 0, 0);
       pushDebugSample(debugTrackingState.serverPayloadBytes, blob.size || 0);
       updateDebugTrackingPanel();
+    } else {
+      const requestDurationMs = performance.now() - requestStart;
+      serverTrackingLastRttMs = requestDurationMs;
+      serverTrackingIntervalMs = computeNextServerTrackingInterval(requestDurationMs);
     }
     serverFaceTrackingBusy = false;
   }
@@ -628,10 +679,10 @@ function startServerFaceTracking() {
   stopFaceTracking();
   faceTrackingActive = true;
   faceTrackingMode   = "server";
+  serverTrackingIntervalMs = 160;
   resetTrackingVisualState();
   overlayRenderRafId    = requestAnimationFrame(runOverlayRenderLoop);
-  void pollServerFaceTracking();
-  serverFaceTrackingTimer = setInterval(() => void pollServerFaceTracking(), 160);
+  scheduleNextServerFaceTrackingPoll(0);
 }
 
 function startFaceTracking() {
