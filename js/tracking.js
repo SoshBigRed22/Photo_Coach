@@ -15,11 +15,240 @@ function clearFaceOverlay() {
   ctx.clearRect(0, 0, faceOverlay.width, faceOverlay.height);
 }
 
+function pushDebugSample(buffer, value, maxSize = 120) {
+  if (!Array.isArray(buffer) || !Number.isFinite(value)) return;
+  buffer.push(value);
+  if (buffer.length > maxSize) buffer.splice(0, buffer.length - maxSize);
+}
+
+function debugAverage(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total / values.length;
+}
+
+function debugPercentile(values, percentile) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((percentile / 100) * (sorted.length - 1))));
+  return sorted[index];
+}
+
+function formatMetric(value, digits = 1) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "n/a";
+}
+
+function getCameraTrackStats() {
+  const track = activeStream?.getVideoTracks?.()[0];
+  const settings = track?.getSettings?.() || {};
+  return {
+    width: settings.width || 0,
+    height: settings.height || 0,
+    frameRate: settings.frameRate || 0,
+    facingMode: settings.facingMode || "unknown",
+  };
+}
+
+function ensureDebugTrackingPanel() {
+  if (debugTrackingState.panel && document.body.contains(debugTrackingState.panel)) {
+    return debugTrackingState.panel;
+  }
+
+  const panel = document.createElement("aside");
+  panel.id = "trackingDebugPanel";
+  panel.style.position = "fixed";
+  panel.style.right = "12px";
+  panel.style.bottom = "12px";
+  panel.style.zIndex = "9999";
+  panel.style.width = "320px";
+  panel.style.maxWidth = "calc(100vw - 24px)";
+  panel.style.background = "rgba(11, 15, 20, 0.9)";
+  panel.style.color = "#d8f0ff";
+  panel.style.border = "1px solid rgba(79, 172, 254, 0.35)";
+  panel.style.borderRadius = "10px";
+  panel.style.padding = "10px 10px 8px";
+  panel.style.fontFamily = "Consolas, Menlo, Monaco, 'Courier New', monospace";
+  panel.style.fontSize = "12px";
+  panel.style.lineHeight = "1.35";
+  panel.style.backdropFilter = "blur(6px)";
+  panel.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.35)";
+
+  const titleRow = document.createElement("div");
+  titleRow.style.display = "flex";
+  titleRow.style.alignItems = "center";
+  titleRow.style.justifyContent = "space-between";
+  titleRow.style.marginBottom = "8px";
+
+  const title = document.createElement("strong");
+  title.textContent = "Tracking Debug";
+  title.style.fontSize = "12px";
+  title.style.letterSpacing = "0.3px";
+
+  const controls = document.createElement("div");
+  controls.style.display = "flex";
+  controls.style.gap = "6px";
+
+  const exportBtn = document.createElement("button");
+  exportBtn.type = "button";
+  exportBtn.textContent = "Export";
+  exportBtn.style.cssText = "font: inherit; color: #d8f0ff; background: rgba(79,172,254,0.2); border: 1px solid rgba(79,172,254,0.45); border-radius: 6px; padding: 2px 6px; cursor: pointer;";
+  exportBtn.addEventListener("click", () => {
+    const snapshot = {
+      capturedAt: new Date().toISOString(),
+      faceTrackingMode,
+      supportsFaceDetector,
+      camera: getCameraTrackStats(),
+      overlay: {
+        renderFps: debugTrackingState.renderFps,
+        detectFps: debugTrackingState.detectFps,
+        missedFrames: debugTrackingState.missedFrames,
+      },
+      timingsMs: {
+        detectAvg: debugAverage(debugTrackingState.detectDurationsMs),
+        detectP95: debugPercentile(debugTrackingState.detectDurationsMs, 95),
+        meshAvg: debugAverage(debugTrackingState.faceMeshDurationsMs),
+        detectorAvg: debugAverage(debugTrackingState.faceDetectorDurationsMs),
+        drawAvg: debugAverage(debugTrackingState.drawDurationsMs),
+        serverRttAvg: debugAverage(debugTrackingState.serverRttMs),
+        serverRttP95: debugPercentile(debugTrackingState.serverRttMs, 95),
+      },
+      samples: {
+        detectDurationsMs: [...debugTrackingState.detectDurationsMs],
+        faceMeshDurationsMs: [...debugTrackingState.faceMeshDurationsMs],
+        faceDetectorDurationsMs: [...debugTrackingState.faceDetectorDurationsMs],
+        drawDurationsMs: [...debugTrackingState.drawDurationsMs],
+        serverRttMs: [...debugTrackingState.serverRttMs],
+        serverPayloadBytes: [...debugTrackingState.serverPayloadBytes],
+      },
+    };
+    const text = JSON.stringify(snapshot, null, 2);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        exportBtn.textContent = "Copied";
+        setTimeout(() => {
+          exportBtn.textContent = "Export";
+        }, 900);
+      }).catch(() => {
+        console.log("[TRACKING DEBUG] Snapshot:", snapshot);
+      });
+      return;
+    }
+    console.log("[TRACKING DEBUG] Snapshot:", snapshot);
+  });
+
+  const hideBtn = document.createElement("button");
+  hideBtn.type = "button";
+  hideBtn.textContent = "Hide";
+  hideBtn.style.cssText = "font: inherit; color: #d8f0ff; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 2px 6px; cursor: pointer;";
+  hideBtn.addEventListener("click", () => setDebugTrackingEnabled(false));
+
+  controls.appendChild(exportBtn);
+  controls.appendChild(hideBtn);
+  titleRow.appendChild(title);
+  titleRow.appendChild(controls);
+
+  const metrics = document.createElement("pre");
+  metrics.id = "trackingDebugMetrics";
+  metrics.style.margin = "0";
+  metrics.style.whiteSpace = "pre-wrap";
+  metrics.style.wordBreak = "break-word";
+  metrics.textContent = "Collecting debug metrics...";
+
+  panel.appendChild(titleRow);
+  panel.appendChild(metrics);
+  document.body.appendChild(panel);
+  debugTrackingState.panel = panel;
+  return panel;
+}
+
+function updateDebugTrackingPanel(force = false) {
+  if (!debugTrackingEnabled) return;
+  const now = performance.now();
+  if (!force && (now - debugTrackingState.lastPanelUpdateTick) < 250) return;
+  debugTrackingState.lastPanelUpdateTick = now;
+
+  const panel = ensureDebugTrackingPanel();
+  const metricsEl = panel.querySelector("#trackingDebugMetrics");
+  if (!metricsEl) return;
+
+  const cameraStats = getCameraTrackStats();
+  const detectAvg = debugAverage(debugTrackingState.detectDurationsMs);
+  const detectP95 = debugPercentile(debugTrackingState.detectDurationsMs, 95);
+  const meshAvg = debugAverage(debugTrackingState.faceMeshDurationsMs);
+  const detectorAvg = debugAverage(debugTrackingState.faceDetectorDurationsMs);
+  const drawAvg = debugAverage(debugTrackingState.drawDurationsMs);
+  const serverRttAvg = debugAverage(debugTrackingState.serverRttMs);
+  const serverRttP95 = debugPercentile(debugTrackingState.serverRttMs, 95);
+  const payloadAvg = debugAverage(debugTrackingState.serverPayloadBytes);
+
+  metricsEl.textContent = [
+    `enabled: ${debugTrackingEnabled ? "yes" : "no"} | mode: ${faceTrackingMode}`,
+    `render fps: ${formatMetric(debugTrackingState.renderFps)} | detect fps: ${formatMetric(debugTrackingState.detectFps)}`,
+    `detect ms avg/p95: ${formatMetric(detectAvg)} / ${formatMetric(detectP95)}`,
+    `mesh ms avg: ${formatMetric(meshAvg)} | detector ms avg: ${formatMetric(detectorAvg)}`,
+    `draw ms avg: ${formatMetric(drawAvg)} | missed frames: ${debugTrackingState.missedFrames}`,
+    `server rtt ms avg/p95: ${formatMetric(serverRttAvg)} / ${formatMetric(serverRttP95)}`,
+    `server payload bytes avg: ${formatMetric(payloadAvg, 0)}`,
+    `camera: ${cameraStats.width || "?"}x${cameraStats.height || "?"} @ ${formatMetric(cameraStats.frameRate)} fps (${cameraStats.facingMode})`,
+  ].join("\n");
+}
+
+function recordDebugRenderTick() {
+  if (!debugTrackingEnabled) return;
+  const now = performance.now();
+  if (!debugTrackingState.lastRenderTick) {
+    debugTrackingState.lastRenderTick = now;
+    return;
+  }
+  debugTrackingState.renderFrames += 1;
+  const elapsed = now - debugTrackingState.lastRenderTick;
+  if (elapsed >= 1000) {
+    debugTrackingState.renderFps = (debugTrackingState.renderFrames * 1000) / elapsed;
+    debugTrackingState.renderFrames = 0;
+    debugTrackingState.lastRenderTick = now;
+  }
+}
+
+function recordDebugDetectTick(totalMs, meshMs, detectorMs) {
+  if (!debugTrackingEnabled) return;
+  const now = performance.now();
+  if (!debugTrackingState.lastDetectTick) {
+    debugTrackingState.lastDetectTick = now;
+  }
+  debugTrackingState.detectFrames += 1;
+  const elapsed = now - debugTrackingState.lastDetectTick;
+  if (elapsed >= 1000) {
+    debugTrackingState.detectFps = (debugTrackingState.detectFrames * 1000) / elapsed;
+    debugTrackingState.detectFrames = 0;
+    debugTrackingState.lastDetectTick = now;
+  }
+  pushDebugSample(debugTrackingState.detectDurationsMs, totalMs);
+  if (Number.isFinite(meshMs) && meshMs > 0) pushDebugSample(debugTrackingState.faceMeshDurationsMs, meshMs);
+  if (Number.isFinite(detectorMs) && detectorMs > 0) pushDebugSample(debugTrackingState.faceDetectorDurationsMs, detectorMs);
+}
+
+function setDebugTrackingEnabled(enabled) {
+  debugTrackingEnabled = Boolean(enabled);
+  if (debugTrackingEnabled) {
+    ensureDebugTrackingPanel().style.display = "block";
+    updateDebugTrackingPanel(true);
+    return;
+  }
+  if (debugTrackingState.panel) {
+    debugTrackingState.panel.style.display = "none";
+  }
+}
+
+function toggleDebugTracking() {
+  setDebugTrackingEnabled(!debugTrackingEnabled);
+}
+
 function resetTrackingVisualState() {
   targetTrackedBox    = null;
   renderedTrackedBox  = null;
   missedTrackingFrames = 0;
   noseAlignmentReady  = false;
+  debugTrackingState.missedFrames = 0;
 }
 
 function clampPercent(value) {
@@ -182,6 +411,7 @@ function drawFaceBox(box) {
 
   targetTrackedBox     = stabilized;
   missedTrackingFrames = 0;
+  debugTrackingState.missedFrames = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +428,7 @@ function runOverlayRenderLoop() {
 
   const displayWidth  = Math.round(faceOverlay.clientWidth);
   const displayHeight = Math.round(faceOverlay.clientHeight);
+  recordDebugRenderTick();
 
   if (displayWidth <= 0 || displayHeight <= 0) {
     console.warn("[TRACKING] Invalid canvas size:", displayWidth, displayHeight);
@@ -229,7 +460,12 @@ function runOverlayRenderLoop() {
       }
     : { ...targetTrackedBox };
 
+  const drawStart = debugTrackingEnabled ? performance.now() : 0;
   drawOverlayBox(renderedTrackedBox);
+  if (debugTrackingEnabled) {
+    pushDebugSample(debugTrackingState.drawDurationsMs, performance.now() - drawStart);
+    updateDebugTrackingPanel();
+  }
   overlayRenderRafId = requestAnimationFrame(runOverlayRenderLoop);
 }
 
@@ -256,19 +492,28 @@ async function runFaceTrackingLoop() {
     faceOverlay.height = displayHeight;
   }
 
+  const loopStart = debugTrackingEnabled ? performance.now() : 0;
+  let meshMs = 0;
+  let detectorMs = 0;
+
   try {
     // Process frame through MediaPipe Face Mesh for landmarks
     if (faceMesh && !faceMeshInitializing) {
       try {
+        const meshStart = debugTrackingEnabled ? performance.now() : 0;
         await faceMesh.send({ image: cameraFeed });
+        if (debugTrackingEnabled) meshMs = performance.now() - meshStart;
       } catch {
         // FaceMesh processing may fail intermittently; continue anyway
       }
     }
 
+    const detectorStart = debugTrackingEnabled ? performance.now() : 0;
     const faces = await faceDetector.detect(cameraFeed);
+    if (debugTrackingEnabled) detectorMs = performance.now() - detectorStart;
     if (!faces.length || !faces[0].boundingBox || !cameraFeed.videoWidth || !cameraFeed.videoHeight) {
       missedTrackingFrames += 1;
+      debugTrackingState.missedFrames = missedTrackingFrames;
       if (missedTrackingFrames > 3) {
         targetTrackedBox = null;
       }
@@ -286,9 +531,15 @@ async function runFaceTrackingLoop() {
   } catch {
     // Some browsers intermittently throw during track state transitions.
     missedTrackingFrames += 1;
+    debugTrackingState.missedFrames = missedTrackingFrames;
     if (missedTrackingFrames > 3) {
       targetTrackedBox = null;
     }
+  }
+
+  if (debugTrackingEnabled) {
+    recordDebugDetectTick(performance.now() - loopStart, meshMs, detectorMs);
+    updateDebugTrackingPanel();
   }
 
   faceTrackingRafId = requestAnimationFrame(runFaceTrackingLoop);
@@ -328,6 +579,7 @@ async function pollServerFaceTracking() {
   formData.append("photo", blob, "frame.jpg");
 
   serverFaceTrackingBusy = true;
+  const requestStart = debugTrackingEnabled ? performance.now() : 0;
   try {
     const response = await fetch(`${API_BASE}/api/track-face`, {
       method: "POST",
@@ -336,6 +588,7 @@ async function pollServerFaceTracking() {
 
     if (!response.ok) {
       missedTrackingFrames += 1;
+      debugTrackingState.missedFrames = missedTrackingFrames;
       if (missedTrackingFrames > 3) targetTrackedBox = null;
       return;
     }
@@ -343,6 +596,7 @@ async function pollServerFaceTracking() {
     const payload = await response.json();
     if (!payload.face_detected || !payload.face_box) {
       missedTrackingFrames += 1;
+      debugTrackingState.missedFrames = missedTrackingFrames;
       if (missedTrackingFrames > 3) targetTrackedBox = null;
       return;
     }
@@ -358,8 +612,14 @@ async function pollServerFaceTracking() {
     drawFaceBox(mapped);
   } catch {
     missedTrackingFrames += 1;
+    debugTrackingState.missedFrames = missedTrackingFrames;
     if (missedTrackingFrames > 3) targetTrackedBox = null;
   } finally {
+    if (debugTrackingEnabled) {
+      pushDebugSample(debugTrackingState.serverRttMs, performance.now() - requestStart);
+      pushDebugSample(debugTrackingState.serverPayloadBytes, blob.size || 0);
+      updateDebugTrackingPanel();
+    }
     serverFaceTrackingBusy = false;
   }
 }
