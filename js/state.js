@@ -105,6 +105,24 @@ let selectedFilterScale      = 1.0;
 let inspirationEntries       = [];
 let pinterestAuthHandle      = null;
 let pinterestConfig          = null;
+let debugTrackingEnabled     = false;
+let debugTrackingState       = {
+  renderFrames: 0,
+  renderFps: 0,
+  detectFrames: 0,
+  detectFps: 0,
+  detectDurationsMs: [],
+  faceMeshDurationsMs: [],
+  faceDetectorDurationsMs: [],
+  drawDurationsMs: [],
+  serverRttMs: [],
+  serverPayloadBytes: [],
+  missedFrames: 0,
+  lastRenderTick: 0,
+  lastDetectTick: 0,
+  lastPanelUpdateTick: 0,
+  panel: null,
+};
 
 // Initialized to null here; set to a real value in app.js after all modules load.
 let selectedPhotoContext = null;
