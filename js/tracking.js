@@ -389,9 +389,15 @@ function getServerTrackingProfile() {
 }
 
 function computeNextServerTrackingInterval(lastRttMs) {
-  // Keep one active request at a time and adapt cadence to observed round-trip latency.
-  const base = Math.max(90, (lastRttMs || 240) * 0.82);
-  return Math.max(90, Math.min(420, Math.round(base)));
+  // Keep one active request at a time.
+  // This value is the post-response pause, not total cycle time.
+  // Small pauses improve responsiveness while avoiding request storms.
+  const rtt = Number.isFinite(lastRttMs) ? lastRttMs : 240;
+  if (rtt >= 420) return 40;
+  if (rtt >= 320) return 28;
+  if (rtt >= 240) return 20;
+  if (rtt >= 170) return 14;
+  return 10;
 }
 
 function scheduleNextServerFaceTrackingPoll(delayMs = 0) {
