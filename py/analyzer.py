@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -20,7 +21,10 @@ class AnalysisResult:
     primary_face_box: tuple[int, int, int, int] | None
 
 
-def _load_face_cascade() -> cv2.CascadeClassifier:
+def _load_face_cascade() -> Any | None:
+    if not hasattr(cv2, "CascadeClassifier"):
+        return None
+
     cv2_data = getattr(cv2, "data", None)
     if cv2_data is not None and hasattr(cv2_data, "haarcascades"):
         cascade_path = Path(cv2_data.haarcascades) / "haarcascade_frontalface_default.xml"
@@ -29,7 +33,7 @@ def _load_face_cascade() -> cv2.CascadeClassifier:
         cascade_path = Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
     classifier = cv2.CascadeClassifier(str(cascade_path))
     if classifier.empty():
-        raise RuntimeError(f"Failed to load face cascade at {cascade_path}")
+        return None
     return classifier
 
 
@@ -49,12 +53,14 @@ def analyze_image(image_path: Path) -> AnalysisResult:
     height, width = gray.shape
 
     face_cascade = _load_face_cascade()
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60),
-    )
+    faces = []
+    if face_cascade is not None:
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(60, 60),
+        )
 
     primary_face_area_ratio = 0.0
     primary_face_center_offset = 0.0
