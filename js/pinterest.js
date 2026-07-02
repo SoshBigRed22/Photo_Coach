@@ -1086,6 +1086,54 @@ function clearPinterestPinsList(message = "") {
   }
 }
 
+async function readPinterestApiPayload(response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return { error: raw || `HTTP ${response.status}` };
+  }
+}
+
+function normalizePinterestErrorMessage(rawMessage, fallback = "Pinterest request failed.") {
+  const message = String(rawMessage || "").trim();
+  const lower = message.toLowerCase();
+  if (!message) return fallback;
+
+  if (lower.includes("session not found") || lower.includes("unknown pinterest auth handle")) {
+    return "Your Pinterest session expired. Please reconnect your account.";
+  }
+  if (lower.includes("state expired") || lower.includes("state invalid") || lower.includes("oauth state")) {
+    return "Pinterest sign-in expired or was canceled. Please connect again.";
+  }
+  if (lower.includes("missing authorization code") || lower.includes("authorization code")) {
+    return "Pinterest sign-in did not complete. Please try connecting again.";
+  }
+  if (lower.includes("not configured") || lower.includes("env vars")) {
+    return "Pinterest OAuth is not configured on the backend yet. Add Pinterest app env vars in Render first.";
+  }
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network")) {
+    return "Network error while contacting Pinterest services. Check connection and try again.";
+  }
+
+  return message;
+}
+
+function resetPinterestAuthState(statusMessage = "Pinterest account not connected.") {
+  pinterestAuthHandle = null;
+  savePinterestAuthHandle();
+
+  if (pinterestBoardSelect) {
+    pinterestBoardSelect.innerHTML = '<option value="">Select a Pinterest board</option>';
+  }
+  clearPinterestPinsList();
+  updatePinterestConnectionUi({ connected: false });
+
+  if (pinterestConnectStatus && statusMessage) {
+    pinterestConnectStatus.textContent = statusMessage;
+  }
+}
+
 function getPinterestConfigBlockReason() {
   if (!pinterestConfig) return "";
   if (pinterestConfig.enabled) return "";
@@ -1131,7 +1179,11 @@ async function loadPinterestConfig() {
   if (!API_BASE) return;
   try {
     const response = await fetch(getPinterestApiUrl("/config"));
-    pinterestConfig = await response.json();
+    const payload = await readPinterestApiPayload(response);
+    if (!response.ok) {
+      throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+    }
+    pinterestConfig = payload;
   } catch {
     pinterestConfig = { enabled: false };
   }
@@ -1146,19 +1198,21 @@ async function syncPinterestStatus() {
 
   try {
     const response = await fetch(getPinterestApiUrl("/status", { auth_handle: pinterestAuthHandle }));
-    const payload  = await response.json();
+    const payload  = await readPinterestApiPayload(response);
 
     if (!response.ok || !payload.connected) {
-      pinterestAuthHandle = null;
-      savePinterestAuthHandle();
-      clearPinterestPinsList();
-      updatePinterestConnectionUi({ connected: false });
+      const message = normalizePinterestErrorMessage(payload.error || payload.message || "Pinterest session expired.");
+      resetPinterestAuthState(message);
       return;
     }
 
     updatePinterestConnectionUi(payload);
-  } catch {
+  } catch (error) {
+    const message = normalizePinterestErrorMessage(error?.message, "Could not verify Pinterest connection.");
     updatePinterestConnectionUi({ connected: false });
+    if (pinterestConnectStatus) {
+      pinterestConnectStatus.textContent = message;
+    }
   }
 }
 
@@ -1173,8 +1227,12 @@ async function loadPinterestBoards() {
     const response = await fetch(
       getPinterestApiUrl("/boards", { auth_handle: pinterestAuthHandle, page_size: 25 })
     );
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not load Pinterest boards.");
+    const payload = await readPinterestApiPayload(response);
+    if (!response.ok) {
+      const err = new Error(payload.error || payload.message || "Could not load Pinterest boards.");
+      err.statusCode = response.status;
+      throw err;
+    }
 
     pinterestBoardSelect.innerHTML = "<option value=\"\">Select a Pinterest board</option>";
     for (const board of payload.items || []) {
@@ -1185,8 +1243,16 @@ async function loadPinterestBoards() {
     }
     updatePinterestConnectionUi({ connected: true, profile: {} });
   } catch (error) {
+    const friendly = normalizePinterestErrorMessage(error?.message, "Could not load Pinterest boards.");
+    if (error?.statusCode === 401 || error?.statusCode === 404 || friendly.includes("session expired")) {
+      resetPinterestAuthState(friendly);
+      return;
+    }
     pinterestBoardSelect.innerHTML = "<option value=\"\">Could not load boards</option>";
-    clearPinterestPinsList(error.message || "Could not load Pinterest boards.");
+    clearPinterestPinsList(friendly);
+    if (pinterestConnectStatus) {
+      pinterestConnectStatus.textContent = friendly;
+    }
   }
 }
 
@@ -1238,11 +1304,20 @@ async function loadPinterestPins() {
     const response = await fetch(
       getPinterestApiUrl("/pins", { auth_handle: pinterestAuthHandle, board_id: boardId, page_size: 25 })
     );
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not load Pinterest pins.");
+    const payload = await readPinterestApiPayload(response);
+    if (!response.ok) {
+      const err = new Error(payload.error || payload.message || "Could not load Pinterest pins.");
+      err.statusCode = response.status;
+      throw err;
+    }
     renderPinterestPins(payload.items || []);
   } catch (error) {
-    clearPinterestPinsList(error.message || "Could not load Pinterest pins.");
+    const friendly = normalizePinterestErrorMessage(error?.message, "Could not load Pinterest pins.");
+    if (error?.statusCode === 401 || error?.statusCode === 404 || friendly.includes("session expired")) {
+      resetPinterestAuthState(friendly);
+      return;
+    }
+    clearPinterestPinsList(friendly);
   }
 }
 
@@ -1258,7 +1333,14 @@ function startPinterestConnectFlow() {
 
   const origin   = window.location.origin;
   const popupUrl = `${API_BASE}/api/pinterest/connect?origin=${encodeURIComponent(origin)}`;
-  window.open(popupUrl, "pinterest-auth", "popup=yes,width=720,height=820");
+  const popup = window.open(popupUrl, "pinterest-auth", "popup=yes,width=720,height=820");
+  if (!popup) {
+    const message = "Could not open Pinterest sign-in popup. Allow popups for this site and try again.";
+    if (pinterestConnectStatus) {
+      pinterestConnectStatus.textContent = message;
+    }
+    alert(message);
+  }
 }
 
 async function disconnectPinterest() {
