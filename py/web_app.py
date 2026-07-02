@@ -114,7 +114,7 @@ def add_cors_headers(response):
 
 CONFIG_PATH = PROJECT_ROOT / "js" / "config.json"
 
-_face_cascade: cv2.CascadeClassifier | None = None
+_face_cascade = None
 PINTEREST_AUTHORIZE_URL = "https://www.pinterest.com/oauth/"
 PINTEREST_TOKEN_URL = "https://api.pinterest.com/v5/oauth/token"
 PINTEREST_API_BASE = "https://api.pinterest.com/v5"
@@ -126,10 +126,14 @@ _pinterest_pending_states: dict[str, dict[str, Any]] = {}
 _pinterest_auth_handles: dict[str, dict[str, Any]] = {}
 
 
-def get_face_cascade() -> cv2.CascadeClassifier:
+def get_face_cascade():
     global _face_cascade
     if _face_cascade is not None:
         return _face_cascade
+
+    if not hasattr(cv2, "CascadeClassifier"):
+        _face_cascade = None
+        return None
 
     cv2_data = getattr(cv2, "data", None)
     if cv2_data is not None and hasattr(cv2_data, "haarcascades"):
@@ -139,7 +143,8 @@ def get_face_cascade() -> cv2.CascadeClassifier:
         cascade_path = Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
     cascade = cv2.CascadeClassifier(str(cascade_path))
     if cascade.empty():
-        raise RuntimeError(f"Failed to load face cascade at {cascade_path}")
+        _face_cascade = None
+        return None
     _face_cascade = cascade
     return cascade
 
@@ -148,6 +153,9 @@ def detect_primary_face_box(frame) -> tuple[dict | None, int, int]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     frame_height, frame_width = gray.shape
     cascade = get_face_cascade()
+
+    if cascade is None:
+        return None, frame_width, frame_height
 
     # Resize before detection to reduce CPU/time, then map box back to full frame.
     scale = 1.0
