@@ -1086,10 +1086,23 @@ function clearPinterestPinsList(message = "") {
   }
 }
 
+function getPinterestConfigBlockReason() {
+  if (!pinterestConfig) return "";
+  if (pinterestConfig.enabled) return "";
+  if (pinterestConfig.requires_app_setup) {
+    return "Pinterest account connect is temporarily unavailable while app approval/setup is pending. Manual inspiration links still work.";
+  }
+  return "Pinterest OAuth is not configured on the backend yet. Add Pinterest app env vars in Render first.";
+}
+
 function updatePinterestConnectionUi(status) {
   const connected = Boolean(status?.connected && pinterestAuthHandle);
+  const blockedReason = getPinterestConfigBlockReason();
 
-  if (connectPinterestBtn)       connectPinterestBtn.disabled      = pinterestConfig ? !pinterestConfig.enabled : false;
+  if (connectPinterestBtn) {
+    connectPinterestBtn.disabled = Boolean(blockedReason);
+    connectPinterestBtn.title = blockedReason || "Connect your Pinterest account";
+  }
   if (disconnectPinterestBtn)    disconnectPinterestBtn.hidden      = !connected;
   if (pinterestBoardSelect)      pinterestBoardSelect.disabled      = !connected;
   if (refreshPinterestBoardsBtn) refreshPinterestBoardsBtn.disabled = !connected;
@@ -1097,8 +1110,8 @@ function updatePinterestConnectionUi(status) {
 
   if (!pinterestConnectStatus) return;
 
-  if (!pinterestConfig?.enabled) {
-    pinterestConnectStatus.textContent = "Pinterest OAuth is not configured on the backend yet. Set the Pinterest app env vars in Render first.";
+  if (blockedReason) {
+    pinterestConnectStatus.textContent = blockedReason;
     return;
   }
 
@@ -1237,8 +1250,9 @@ async function loadPinterestPins() {
 // OAuth connect / disconnect
 // ---------------------------------------------------------------------------
 function startPinterestConnectFlow() {
-  if (!pinterestConfig?.enabled) {
-    alert("Pinterest OAuth is not configured on the backend yet. Add the Pinterest app env vars in Render first.");
+  const blockedReason = getPinterestConfigBlockReason();
+  if (blockedReason) {
+    alert(blockedReason);
     return;
   }
 
