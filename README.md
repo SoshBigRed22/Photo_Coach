@@ -81,3 +81,33 @@ Notes:
 
 - Add aesthetic scoring model.
 - Build a mobile frontend (Flutter/React Native) with this Python backend.
+
+## Pinterest OAuth Setup (Phase 2)
+
+To enable Pinterest account connect and board/pin import, configure these Render env vars on the Flask service:
+
+- `PINTEREST_APP_ID`
+- `PINTEREST_APP_SECRET`
+- `PINTEREST_REDIRECT_URI`
+
+Use a redirect URI that exactly matches the URI configured in your Pinterest developer app, for example:
+
+```text
+https://your-render-service.onrender.com/api/pinterest/callback
+```
+
+Pinterest API access also requires an approved developer app with the scopes used here:
+
+- `boards:read`
+- `pins:read`
+- `user_accounts:read`
+
+## Pinterest Fallback Mode (No OAuth Yet)
+
+If Pinterest app trial/approval is still pending, the app still supports a manual inspiration workflow:
+
+- Paste Pinterest pin URLs directly in the Inspiration panel.
+- Add optional notes (for style hints like "septum", "hoop", "minimalist").
+- Imported links still influence recommendation weighting.
+
+This lets demo and portfolio use continue without waiting for OAuth approval.
