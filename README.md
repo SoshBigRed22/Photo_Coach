@@ -111,3 +111,36 @@ If Pinterest app trial/approval is still pending, the app still supports a manua
 - Imported links still influence recommendation weighting.
 
 This lets demo and portfolio use continue without waiting for OAuth approval.
+
+## Production Hardening Notes
+
+### CORS Origin Allowlist
+
+Set `CORS_ORIGIN` to the frontend origin(s) that call your backend API.
+
+For this project, include your GitHub Pages origin and optionally your Render origin in one comma-separated value:
+
+```text
+CORS_ORIGIN=https://yourusername.github.io,https://photo-coach-j95a.onrender.com
+```
+
+Rules:
+
+- Use one env var value, not multiple `CORS_ORIGIN` keys.
+- Use origins only (scheme + host), no path.
+- Avoid trailing slashes.
+
+### Privacy Policy Routing
+
+- GitHub Pages serves the static page at `privacy-policy.html`.
+- Flask route `/privacy-policy` redirects to `/privacy-policy.html` for backend-hosted access.
+
+### Pinterest Session Limitation (Current MVP)
+
+Pinterest auth handles/tokens are currently kept in server memory.
+
+Implication:
+
+- After backend restart/redeploy, users may need to reconnect Pinterest.
+
+This is expected for the current MVP scope and can be upgraded later to persistent storage.
