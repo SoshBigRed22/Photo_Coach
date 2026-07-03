@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import re
@@ -959,6 +960,7 @@ def fetch_pin_image():
 
     if requests is None:
         return jsonify({"error": "Server dependency 'requests' is not installed."}), 500
+    http = requests
 
     hdrs = {
         "User-Agent": (
@@ -970,34 +972,75 @@ def fetch_pin_image():
         "Accept-Language": "en-US,en;q=0.5",
     }
 
+    def extract_pinimg_from_html(page_text: str) -> str | None:
+        patterns = [
+            r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\' ]+)["\']',
+            r'<meta[^>]+content=["\']([^"\' ]+)["\'][^>]+property=["\']og:image',
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\' ]+)["\']',
+            r'"image_url"\s*:\s*"(https://i\.pinimg\.com/[^"]+)"',
+        ]
+        for pat in patterns:
+            m = re.search(pat, page_text)
+            if m:
+                candidate = html.unescape(m.group(1)).replace("\\/", "/")
+                if "pinimg.com" in candidate:
+                    return candidate
+        return None
+
+    def extract_pinimg_via_oembed(source_url: str) -> str | None:
+        oembed_resp = http.get(
+            "https://www.pinterest.com/oembed.json",
+            params={"url": source_url},
+            headers=hdrs,
+            timeout=12,
+        )
+        if not oembed_resp.ok:
+            return None
+        try:
+            payload = oembed_resp.json()
+        except ValueError:
+            return None
+        candidates = [
+            payload.get("thumbnail_url"),
+            payload.get("image_url"),
+            payload.get("url"),
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, str) and "pinimg.com" in candidate:
+                return candidate
+        return None
+
     try:
         image_url = pin_url
 
-        # If it's a Pinterest pin page, extract the image URL via og:image meta
+        # If it's a Pinterest pin page, extract a direct pinimg URL first.
         if "pinterest." in hostname:
-            page_resp = requests.get(pin_url, headers=hdrs, timeout=12)
-            page_resp.raise_for_status()
-            patterns = [
-                r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\' ]+)["\']',
-                r'<meta[^>]+content=["\']([^"\' ]+)["\'][^>]+property=["\']og:image',
-                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\' ]+)["\']',
-                r'"image_url"\s*:\s*"(https://i\.pinimg\.com/[^"]+)"',
-            ]
             found_url = None
-            for pat in patterns:
-                m = re.search(pat, page_resp.text)
-                if m:
-                    found_url = m.group(1)
-                    break
+            try:
+                page_resp = http.get(pin_url, headers=hdrs, timeout=12)
+                if page_resp.ok:
+                    found_url = extract_pinimg_from_html(page_resp.text)
+            except requests.RequestException:
+                found_url = None
+
             if not found_url:
-                return jsonify({
-                    "error": "Could not extract image from that pin page. Try pasting a direct image URL instead."
-                }), 400
+                found_url = extract_pinimg_via_oembed(pin_url)
+
+            if not found_url:
+                return jsonify(
+                    {
+                        "error": "Pinterest blocked pin-page fetch from the server. Try Retry, or paste a direct i.pinimg.com image URL.",
+                    }
+                ), 502
+
             image_url = found_url
 
         # Fetch the actual image bytes
-        img_resp = requests.get(image_url, headers=hdrs, timeout=15)
+        img_resp = http.get(image_url, headers=hdrs, timeout=15)
         img_resp.raise_for_status()
+        content_type = (img_resp.headers.get("Content-Type") or "").lower()
+        if content_type and "image" not in content_type:
+            return jsonify({"error": "Fetched URL did not return an image. Try a different pin or direct image URL."}), 502
 
         # Decode with OpenCV
         arr = np.frombuffer(img_resp.content, dtype=np.uint8)
@@ -1008,7 +1051,7 @@ def fetch_pin_image():
         return jsonify({"image": remove_background_to_data_url(img, raw_bytes=img_resp.content), "sourceUrl": image_url})
 
     except requests.RequestException as exc:
-        return jsonify({"error": f"Failed to fetch image: {exc}"}), 500
+        return jsonify({"error": f"Failed to fetch image from Pinterest upstream: {exc}"}), 502
     except Exception as exc:  # pragma: no cover
         return jsonify({"error": f"Processing failed: {exc}"}), 500
 
