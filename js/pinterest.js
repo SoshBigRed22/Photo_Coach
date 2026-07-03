@@ -150,7 +150,13 @@ async function processPinImage(entryId, url) {
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ url }),
     });
-    const data = await resp.json();
+    const raw = await resp.text();
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { error: raw || `HTTP ${resp.status}` };
+    }
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
 
     const idx = inspirationEntries.findIndex((e) => e.id === entryId);
