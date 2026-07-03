@@ -521,18 +521,53 @@ function deriveFaceBoxFromLandmarks(landmarks, displayWidth, displayHeight) {
   const padX = Math.max(8, width * 0.08);
   const padTop = Math.max(10, height * 0.08);
   const padBottom = Math.max(10, height * 0.06);
-  const horizontalCalibration = 1.18; // temporary manual fit for current face
 
   const x = Math.max(0, minX - padX);
   const y = Math.max(0, minY - padTop);
   const right = Math.min(displayWidth, maxX + padX);
   const bottom = Math.min(displayHeight, maxY + padBottom);
 
+  const boxWidth = Math.max(1, right - x);
+  const boxHeight = Math.max(1, bottom - y);
+  const aspect = boxWidth / boxHeight;
+
+  // Auto-calibrate width so the oval better follows cheeks across front and angled poses.
+  const targetAspect = 0.76;
+  const baseScale = aspect < targetAspect ? (targetAspect / Math.max(0.01, aspect)) : 1;
+
+  const jawLeft = landmarks[234];
+  const jawRight = landmarks[454];
+  const noseTip = landmarks[1];
+  let yawNorm = 0;
+  if (jawLeft && jawRight && noseTip) {
+    const faceWidthNorm = Math.max(0.0001, Math.abs(jawRight.x - jawLeft.x));
+    const centerNorm = (jawLeft.x + jawRight.x) * 0.5;
+    yawNorm = Math.abs(noseTip.x - centerNorm) / faceWidthNorm;
+  }
+  const yawBoost = 1 + Math.min(0.38, yawNorm * 1.2);
+  const horizontalCalibration = Math.min(1.7, Math.max(1.08, baseScale * yawBoost));
+
   const centerX = (x + right) * 0.5;
   const halfWidth = (right - x) * 0.5;
   const calibratedHalfWidth = halfWidth * horizontalCalibration;
-  const calibratedLeft = Math.max(0, centerX - calibratedHalfWidth);
-  const calibratedRight = Math.min(displayWidth, centerX + calibratedHalfWidth);
+
+  let calibratedLeft = Math.max(0, centerX - calibratedHalfWidth);
+  let calibratedRight = Math.min(displayWidth, centerX + calibratedHalfWidth);
+
+  if (jawLeft && jawRight) {
+    const jawLeftX = displayWidth - (jawLeft.x * displayWidth);
+    const jawRightX = displayWidth - (jawRight.x * displayWidth);
+    const jawSpan = Math.abs(jawRightX - jawLeftX);
+    const jawCenterX = (jawLeftX + jawRightX) * 0.5;
+    const currentWidth = Math.max(1, calibratedRight - calibratedLeft);
+    const minWidthFromJaw = jawSpan * 1.18;
+    const minWidthFromAspect = boxHeight * 0.76;
+    const targetWidth = Math.max(currentWidth, minWidthFromJaw, minWidthFromAspect);
+    const halfTarget = targetWidth * 0.5;
+
+    calibratedLeft = Math.max(0, jawCenterX - halfTarget);
+    calibratedRight = Math.min(displayWidth, jawCenterX + halfTarget);
+  }
 
   return {
     x: calibratedLeft,
