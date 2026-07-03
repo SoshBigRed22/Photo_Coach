@@ -685,6 +685,32 @@ function _initCropEvents() {
   canvas.addEventListener("touchend",   onEnd);
 }
 
+function _expandCropBounds(selection, imageWidth, imageHeight, placement) {
+  const basePadX = placement === "septum"
+    ? Math.round(selection.w * 1.15)
+    : Math.round(selection.w * 0.65);
+  const basePadY = placement === "septum"
+    ? Math.round(selection.h * 1.25)
+    : Math.round(selection.h * 0.70);
+
+  const minPadX = placement === "septum" ? 28 : 18;
+  const minPadY = placement === "septum" ? 28 : 18;
+  const padX = Math.max(minPadX, basePadX);
+  const padY = Math.max(minPadY, basePadY);
+
+  const x = Math.max(0, Math.floor(selection.x - padX));
+  const y = Math.max(0, Math.floor(selection.y - padY));
+  const right = Math.min(imageWidth, Math.ceil(selection.x + selection.w + padX));
+  const bottom = Math.min(imageHeight, Math.ceil(selection.y + selection.h + padY));
+
+  return {
+    x,
+    y,
+    w: Math.max(1, right - x),
+    h: Math.max(1, bottom - y),
+  };
+}
+
 async function confirmCrop() {
   if (!_cropSel || _cropSel.w < 8 || _cropSel.h < 8) {
     alert("Please drag to select the jewelry area first.");
@@ -701,25 +727,47 @@ async function confirmCrop() {
   // Map display coords → original image coords
   const scaleX = _cropOriginalImage.naturalWidth  / canvas.width;
   const scaleY = _cropOriginalImage.naturalHeight / canvas.height;
-  const srcX = Math.round(_cropSel.x * scaleX);
-  const srcY = Math.round(_cropSel.y * scaleY);
-  const srcW = Math.max(1, Math.round(_cropSel.w * scaleX));
-  const srcH = Math.max(1, Math.round(_cropSel.h * scaleY));
+  const rawSelection = {
+    x: Math.round(_cropSel.x * scaleX),
+    y: Math.round(_cropSel.y * scaleY),
+    w: Math.max(1, Math.round(_cropSel.w * scaleX)),
+    h: Math.max(1, Math.round(_cropSel.h * scaleY)),
+  };
 
-  // Draw cropped region into a temp canvas
+  const safeName    = String((_cropPendingFile && _cropPendingFile.name) || "cropped-image").trim();
+  const styleTokens = parseStyleTokens(`${safeName} ${_cropPendingNote || ""}`);
+  const placement   = inferPlacement(styleTokens);
+  const expandedSelection = _expandCropBounds(
+    rawSelection,
+    _cropOriginalImage.naturalWidth,
+    _cropOriginalImage.naturalHeight,
+    placement,
+  );
+
+  // Draw the expanded region into a temp canvas so fine jewelry details stay intact.
   const tmp = document.createElement("canvas");
-  tmp.width  = srcW;
-  tmp.height = srcH;
+  tmp.width  = expandedSelection.w;
+  tmp.height = expandedSelection.h;
   const tmpCtx = tmp.getContext("2d");
-  tmpCtx.drawImage(_cropOriginalImage, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+  tmpCtx.drawImage(
+    _cropOriginalImage,
+    expandedSelection.x,
+    expandedSelection.y,
+    expandedSelection.w,
+    expandedSelection.h,
+    0,
+    0,
+    expandedSelection.w,
+    expandedSelection.h,
+  );
 
   // Remove near-white background (helps if the crop includes a white background around the jewelry)
-  const imgData = tmpCtx.getImageData(0, 0, srcW, srcH);
+  const imgData = tmpCtx.getImageData(0, 0, expandedSelection.w, expandedSelection.h);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
     const brightness = (d[i] + d[i + 1] + d[i + 2]) / 3;
     const maxDelta = Math.max(Math.abs(d[i] - d[i + 1]), Math.abs(d[i + 1] - d[i + 2]), Math.abs(d[i] - d[i + 2]));
-    if (brightness >= 230 && maxDelta <= 25) d[i + 3] = 0;
+    if (brightness >= 236 && maxDelta <= 22) d[i + 3] = 0;
   }
   tmpCtx.putImageData(imgData, 0, 0);
 
@@ -732,10 +780,6 @@ async function confirmCrop() {
   _cropPendingNote = null;
 
   // Build the entry with the cropped image directly — no server, no heuristics
-  const safeName    = String(file.name || "cropped-image").trim();
-  const styleTokens = parseStyleTokens(`${safeName} ${note}`);
-  const placement   = inferPlacement(styleTokens);
-
   let processedCroppedImage = croppedDataUrl;
   try {
     // Run manual crop output through the same cleanup/trim pipeline as imported links.
