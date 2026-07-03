@@ -521,16 +521,23 @@ function deriveFaceBoxFromLandmarks(landmarks, displayWidth, displayHeight) {
   const padX = Math.max(8, width * 0.08);
   const padTop = Math.max(10, height * 0.08);
   const padBottom = Math.max(10, height * 0.06);
+  const horizontalCalibration = 1.18; // temporary manual fit for current face
 
   const x = Math.max(0, minX - padX);
   const y = Math.max(0, minY - padTop);
   const right = Math.min(displayWidth, maxX + padX);
   const bottom = Math.min(displayHeight, maxY + padBottom);
 
+  const centerX = (x + right) * 0.5;
+  const halfWidth = (right - x) * 0.5;
+  const calibratedHalfWidth = halfWidth * horizontalCalibration;
+  const calibratedLeft = Math.max(0, centerX - calibratedHalfWidth);
+  const calibratedRight = Math.min(displayWidth, centerX + calibratedHalfWidth);
+
   return {
-    x,
+    x: calibratedLeft,
     y,
-    width: Math.max(1, right - x),
+    width: Math.max(1, calibratedRight - calibratedLeft),
     height: Math.max(1, bottom - y),
   };
 }
