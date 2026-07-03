@@ -685,7 +685,7 @@ function _initCropEvents() {
   canvas.addEventListener("touchend",   onEnd);
 }
 
-function confirmCrop() {
+async function confirmCrop() {
   if (!_cropSel || _cropSel.w < 8 || _cropSel.h < 8) {
     alert("Please drag to select the jewelry area first.");
     return;
@@ -734,6 +734,16 @@ function confirmCrop() {
   // Build the entry with the cropped image directly — no server, no heuristics
   const safeName    = String(file.name || "cropped-image").trim();
   const styleTokens = parseStyleTokens(`${safeName} ${note}`);
+  const placement   = inferPlacement(styleTokens);
+
+  let processedCroppedImage = croppedDataUrl;
+  try {
+    // Run manual crop output through the same cleanup/trim pipeline as imported links.
+    processedCroppedImage = await normalizeOverlayDataUrl(croppedDataUrl, placement);
+  } catch (error) {
+    console.warn("[Inspiration] Crop normalization failed, using raw crop.", error);
+  }
+
   const entry = {
     id:               `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     sourceType:       "upload",
@@ -741,8 +751,8 @@ function confirmCrop() {
     note:             note.trim() || safeName,
     styleTokens,
     addedAt:          Date.now(),
-    placement:        inferPlacement(styleTokens),
-    processedImage:   croppedDataUrl,
+    placement,
+    processedImage:   processedCroppedImage,
     normalizationMode: "manual-crop",
     processingStatus: "done",
     processingError:  null,
