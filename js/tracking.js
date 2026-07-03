@@ -486,12 +486,21 @@ function deriveFaceBoxFromLandmarks(landmarks, displayWidth, displayHeight) {
     return null;
   }
 
+  const faceContourIndices = [
+    10, 338, 297, 332, 284, 251, 389, 356,
+    454, 323, 361, 288, 397, 365, 379, 378,
+    400, 377, 152, 148, 176, 149, 150, 136,
+    172, 58, 132, 93, 234, 127, 162, 21,
+    54, 103, 67, 109,
+  ];
+
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
 
-  for (const landmark of landmarks) {
+  for (const index of faceContourIndices) {
+    const landmark = landmarks[index];
     if (!landmark) continue;
     const x = displayWidth - (landmark.x * displayWidth);
     const y = landmark.y * displayHeight;
@@ -509,14 +518,20 @@ function deriveFaceBoxFromLandmarks(landmarks, displayWidth, displayHeight) {
 
   const width = Math.max(1, maxX - minX);
   const height = Math.max(1, maxY - minY);
-  const padX = Math.max(12, width * 0.14);
-  const padY = Math.max(12, height * 0.16);
+  const padX = Math.max(8, width * 0.08);
+  const padTop = Math.max(10, height * 0.08);
+  const padBottom = Math.max(10, height * 0.06);
+
+  const x = Math.max(0, minX - padX);
+  const y = Math.max(0, minY - padTop);
+  const right = Math.min(displayWidth, maxX + padX);
+  const bottom = Math.min(displayHeight, maxY + padBottom);
 
   return {
-    x: Math.max(0, minX - padX),
-    y: Math.max(0, minY - padY),
-    width: Math.min(displayWidth, width + (padX * 2)),
-    height: Math.min(displayHeight, height + (padY * 2)),
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y),
   };
 }
 
