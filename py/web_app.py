@@ -122,6 +122,9 @@ PINTEREST_API_BASE = "https://api.pinterest.com/v5"
 PINTEREST_SCOPES = ("boards:read", "pins:read", "user_accounts:read")
 PINTEREST_REQUEST_TIMEOUT = 20
 PINTEREST_STATE_TTL_SECONDS = 900
+PINTEREST_OEMBED_TIMEOUT = 6
+PINTEREST_PAGE_TIMEOUT = 6
+PINTEREST_IMAGE_TIMEOUT = 10
 
 _pinterest_pending_states: dict[str, dict[str, Any]] = {}
 _pinterest_auth_handles: dict[str, dict[str, Any]] = {}
@@ -992,7 +995,7 @@ def fetch_pin_image():
             "https://www.pinterest.com/oembed.json",
             params={"url": source_url},
             headers=hdrs,
-            timeout=12,
+            timeout=PINTEREST_OEMBED_TIMEOUT,
         )
         if not oembed_resp.ok:
             return None
@@ -1013,30 +1016,35 @@ def fetch_pin_image():
     try:
         image_url = pin_url
 
-        # If it's a Pinterest pin page, extract a direct pinimg URL first.
+        # If it's a Pinterest pin page, use the fastest metadata path first.
         if "pinterest." in hostname:
-            found_url = None
-            try:
-                page_resp = http.get(pin_url, headers=hdrs, timeout=12)
-                if page_resp.ok:
-                    found_url = extract_pinimg_from_html(page_resp.text)
-            except requests.RequestException:
-                found_url = None
+            found_url = extract_pinimg_via_oembed(pin_url)
 
             if not found_url:
-                found_url = extract_pinimg_via_oembed(pin_url)
+                try:
+                    page_resp = http.get(pin_url, headers=hdrs, timeout=PINTEREST_PAGE_TIMEOUT)
+                    if page_resp.ok:
+                        found_url = extract_pinimg_from_html(page_resp.text)
+                except requests.RequestException:
+                    found_url = None
+
+            # Some Pinterest share URLs already embed a pinimg URL in query params/text.
+            if not found_url:
+                direct_match = re.search(r"https?://i\.pinimg\.com/[^\s\"'<>]+", pin_url)
+                if direct_match:
+                    found_url = direct_match.group(0)
 
             if not found_url:
                 return jsonify(
                     {
-                        "error": "Pinterest blocked pin-page fetch from the server. Try Retry, or paste a direct i.pinimg.com image URL.",
+                        "error": "Could not resolve this Pinterest page to a direct image in time. Try Retry, or paste a direct i.pinimg.com image URL.",
                     }
-                ), 502
+                ), 504
 
             image_url = found_url
 
         # Fetch the actual image bytes
-        img_resp = http.get(image_url, headers=hdrs, timeout=15)
+        img_resp = http.get(image_url, headers=hdrs, timeout=PINTEREST_IMAGE_TIMEOUT)
         img_resp.raise_for_status()
         content_type = (img_resp.headers.get("Content-Type") or "").lower()
         if content_type and "image" not in content_type:
@@ -1050,6 +1058,8 @@ def fetch_pin_image():
 
         return jsonify({"image": remove_background_to_data_url(img, raw_bytes=img_resp.content), "sourceUrl": image_url})
 
+    except requests.Timeout as exc:
+        return jsonify({"error": f"Pinterest fetch timed out: {exc}"}), 504
     except requests.RequestException as exc:
         return jsonify({"error": f"Failed to fetch image from Pinterest upstream: {exc}"}), 502
     except Exception as exc:  # pragma: no cover
