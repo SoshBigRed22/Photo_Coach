@@ -481,6 +481,45 @@ function mapBoundingBoxToDisplay(box, srcWidth, srcHeight, displayWidth, display
   };
 }
 
+function deriveFaceBoxFromLandmarks(landmarks, displayWidth, displayHeight) {
+  if (!landmarks || landmarks.length < 10 || !Number.isFinite(displayWidth) || !Number.isFinite(displayHeight)) {
+    return null;
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const landmark of landmarks) {
+    if (!landmark) continue;
+    const x = displayWidth - (landmark.x * displayWidth);
+    const y = landmark.y * displayHeight;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const padX = Math.max(12, width * 0.14);
+  const padY = Math.max(12, height * 0.16);
+
+  return {
+    x: Math.max(0, minX - padX),
+    y: Math.max(0, minY - padY),
+    width: Math.min(displayWidth, width + (padX * 2)),
+    height: Math.min(displayHeight, height + (padY * 2)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Smoothed face-box update
 // ---------------------------------------------------------------------------
@@ -558,7 +597,7 @@ function runOverlayRenderLoop() {
 // Local FaceDetector tracking loop
 // ---------------------------------------------------------------------------
 async function runFaceTrackingLoop() {
-  if (!faceTrackingActive || !faceDetector || !activeStream || !faceOverlay) {
+  if (!faceTrackingActive || !activeStream || !faceOverlay) {
     faceTrackingRafId = null;
     return;
   }
@@ -580,6 +619,7 @@ async function runFaceTrackingLoop() {
   const loopStart = debugTrackingEnabled ? performance.now() : 0;
   let meshMs = 0;
   let detectorMs = 0;
+  let landmarkBoxUsed = false;
 
   try {
     // Process frame through MediaPipe Face Mesh for landmarks
@@ -593,25 +633,37 @@ async function runFaceTrackingLoop() {
       }
     }
 
-    const detectorStart = debugTrackingEnabled ? performance.now() : 0;
-    const faces = await faceDetector.detect(cameraFeed);
-    if (debugTrackingEnabled) detectorMs = performance.now() - detectorStart;
-    if (!faces.length || !faces[0].boundingBox || !cameraFeed.videoWidth || !cameraFeed.videoHeight) {
+    let box = null;
+
+    if (faceDetector) {
+      const detectorStart = debugTrackingEnabled ? performance.now() : 0;
+      const faces = await faceDetector.detect(cameraFeed);
+      if (debugTrackingEnabled) detectorMs = performance.now() - detectorStart;
+      if (faces.length && faces[0].boundingBox && cameraFeed.videoWidth && cameraFeed.videoHeight) {
+        box = mapBoundingBoxToDisplay(
+          faces[0].boundingBox,
+          cameraFeed.videoWidth,
+          cameraFeed.videoHeight,
+          displayWidth,
+          displayHeight,
+          true
+        );
+      }
+    }
+
+    if (!box && detectedLandmarks) {
+      box = deriveFaceBoxFromLandmarks(detectedLandmarks, displayWidth, displayHeight);
+      landmarkBoxUsed = Boolean(box);
+    }
+
+    if (box) {
+      drawFaceBox(box);
+    } else {
       missedTrackingFrames += 1;
       debugTrackingState.missedFrames = missedTrackingFrames;
       if (missedTrackingFrames > 3) {
         targetTrackedBox = null;
       }
-    } else {
-      const box = mapBoundingBoxToDisplay(
-        faces[0].boundingBox,
-        cameraFeed.videoWidth,
-        cameraFeed.videoHeight,
-        displayWidth,
-        displayHeight,
-        true
-      );
-      drawFaceBox(box);
     }
   } catch {
     // Some browsers intermittently throw during track state transitions.
@@ -740,8 +792,9 @@ function startFaceTracking() {
   // Initialize MediaPipe Face Mesh for landmark detection
   void initializeFaceMesh();
 
-  if (supportsFaceDetector) {
-    console.log("[TRACKING] Using FaceDetector API");
+  const canUseLocalTracking = supportsFaceDetector || typeof window.FaceMesh !== "undefined" || faceMesh || faceMeshInitializing;
+  if (canUseLocalTracking) {
+    console.log("[TRACKING] Using local tracking (FaceDetector or FaceMesh)");
     stopFaceTracking();
     faceTrackingActive = true;
     faceTrackingMode   = "local";
@@ -757,7 +810,7 @@ function startFaceTracking() {
     return;
   }
 
-  console.warn("[PhotoCoach] FaceDetector unavailable. Using backend face tracking fallback.");
+  console.warn("[PhotoCoach] FaceDetector/FaceMesh unavailable. Using backend face tracking fallback.");
   startServerFaceTracking();
 }
 
