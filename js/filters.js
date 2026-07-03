@@ -23,6 +23,12 @@ function getLandmarkCoordinate(landmarks, index, box, displayWidth, displayHeigh
 // ---------------------------------------------------------------------------
 // Dynamic face box (shape varies by detected face shape)
 // ---------------------------------------------------------------------------
+function getDisplayFaceShape() {
+  // Keep the live tracker visually stable even when face-shape classification is noisy.
+  if (detectedFaceShape === "round") return "round";
+  return "oval";
+}
+
 function drawDynamicFaceBox(ctx, box) {
   ctx.save();
   ctx.lineWidth   = 3;
@@ -33,8 +39,9 @@ function drawDynamicFaceBox(ctx, box) {
   const centerY = box.y + box.height * 0.5;
   const w       = box.width  * 0.5;
   const h       = box.height * 0.5;
+  const displayShape = getDisplayFaceShape();
 
-  switch (detectedFaceShape) {
+  switch (displayShape) {
     case "round":
       ctx.beginPath();
       ctx.ellipse(centerX, centerY, w, h, 0, 0, Math.PI * 2);
